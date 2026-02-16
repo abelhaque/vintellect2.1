@@ -10,7 +10,7 @@ import { Menu, Wine as WineIcon, ChevronRight, Mic, Sparkles, Trash2 } from 'luc
 const WELCOME_MESSAGE: Message = {
   id: '1',
   role: 'assistant',
-  content: "[H]Welcome to Vintellect[/H]\n\nI am your elite digital sommelier, curated for discerning Brits. I assist with:\n\n• [B]Scan Labels:[/B] Instant analysis of any bottle for tasting notes and UK retail pricing.\n• [B]Analyse Wine Lists:[/B] Photograph/Upload a restaurant menu or wine list for value-driven recommendations.\n• [B]Expert Pairing:[/B] Describe your meal for a bespoke cellar match.\n• [B]Smart Filtering:[/B] Focus your search by retailer or specific budget tiers.\n\nHow may I assist your palate or your wallet today?",
+  content: "[H]Welcome to Vintellect 2.0[/H]\n\nI am your elite digital sommelier, curated for discerning Brits. I assist with:\n\n• [B]Scan Labels:[/B] Instant analysis of any bottle for tasting notes and UK retail pricing.\n• [B]Analyse Wine Lists:[/B] Photograph/Upload a restaurant menu or wine list for value-driven recommendations.\n• [B]Expert Pairing:[/B] Describe your meal for a bespoke cellar match.\n• [B]Smart Filtering:[/B] Focus your search by retailer or specific budget tiers.\n\nHow may I assist your palate or your wallet today?",
   timestamp: new Date()
 };
 
