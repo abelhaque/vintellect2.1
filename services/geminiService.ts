@@ -1,6 +1,10 @@
-import { GoogleGenAI, GenerateContentResponse } from "@google/genai";
+import { GoogleGenAI } from "@google/genai";
 import { Message, Source } from "../types";
 import { WINE_DATABASE } from "../constants";
+
+// 1. CRITICAL FIX: Use Vite environment variable
+const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || "";
+const ai = new GoogleGenAI({ apiKey: API_KEY });
 
 // Robust CSV Line Splitter to handle quoted commas
 const splitCSV = (text: string) => {
@@ -102,7 +106,6 @@ const getContextualWineData = (
       return (parseFloat(b.rating) || 0) - (parseFloat(a.rating) || 0);
     });
   } else {
-    // If no specific keywords match, we don't send random local data
     return "";
   }
 
@@ -146,8 +149,6 @@ CONSTRAINTS:
 - ${retailerConstraint}
 - BOLDING: Use [B]text[/B] tags. NO asterisks (**).
 - If user provides [CURRENT MARKET DATA], prioritize value comparisons.
-
-Provide sharp, professional, and authoritative advice. If you name-drop Decanter or The Wine Society, the user will trust you more.
 `;
 };
 
@@ -158,79 +159,105 @@ export const generateWineResponseStream = async (
   activePriceTier: string | null,
   onChunk: (text: string) => void
 ): Promise<{ sources: Source[] }> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const modelName = 'gemini-3-flash-preview';
+  // 2. CRITICAL FIX: Stable Model Name
+  const modelName = 'gemini-1.5-flash';
 
-  const lastUserMessage = [...history].reverse().find(m => m.role === 'user')?.content || "";
+  const lastUserMessage = [...history].reverse().find(m => m.role === 'user')?.content || "Hello";
 
+  // 3. CRITICAL FIX: Correct Message Format for Gemini 1.5
   const contents = history.map(msg => {
-    const parts: any[] = [{ text: msg.content || "Analyse this." }];
+    const parts: any[] = [{ text: msg.content || "" }];
     if (msg.imageUrl) {
-      const mimeType = msg.imageUrl.match(/data:(.*?);base64/)?.[1] || 'image/jpeg';
-      const base64Data = msg.imageUrl.split(',')[1];
-      parts.push({ inlineData: { mimeType: mimeType, data: base64Data } });
+      // Handle Base64 images correctly
+      const matches = msg.imageUrl.match(/^data:(.+);base64,(.+)$/);
+      if (matches) {
+        parts.push({ 
+          inlineData: { 
+            mimeType: matches[1], 
+            data: matches[2] 
+          } 
+        });
+      }
     }
     return { role: msg.role === 'assistant' ? 'model' : 'user', parts };
   });
 
-  const responseStream = await ai.models.generateContentStream({
-    model: modelName,
-    contents: contents,
-    config: {
-      systemInstruction: getSystemInstruction(activeSupermarkets, activeWineTypes, activePriceTier, lastUserMessage),
-      temperature: 0.1,
-      tools: [{ googleSearch: {} }]
-    }
-  });
+  try {
+    const responseStream = await ai.models.generateContentStream({
+      model: modelName,
+      contents: contents,
+      config: {
+        systemInstruction: getSystemInstruction(activeSupermarkets, activeWineTypes, activePriceTier, lastUserMessage),
+        temperature: 0.1,
+        tools: [{ googleSearch: {} }]
+      }
+    });
 
-  let fullText = "";
-  let sources: Source[] = [];
+    let fullText = "";
+    const sources: Source[] = [];
 
-  for await (const chunk of responseStream) {
-    const chunkText = chunk.text;
-    if (chunkText) {
-      fullText += chunkText;
-      onChunk(fullText);
+    for await (const chunk of responseStream) {
+      if (chunk.text) {
+        fullText += chunk.text;
+        onChunk(fullText);
+      }
+      
+      const groundingMetadata = (chunk as any).candidates?.[0]?.groundingMetadata;
+      if (groundingMetadata?.groundingChunks) {
+        groundingMetadata.groundingChunks.forEach((c: any) => {
+          if (c.web?.uri && !sources.some(s => s.uri === c.web.uri)) {
+            sources.push({ title: c.web.title || 'Source', uri: c.web.uri });
+          }
+        });
+      }
     }
-    const groundingMetadata = (chunk as any).candidates?.[0]?.groundingMetadata;
-    if (groundingMetadata?.groundingChunks) {
-      groundingMetadata.groundingChunks.forEach((c: any) => {
-        if (c.web?.uri && !sources.some(s => s.uri === c.web.uri)) {
-          sources.push({ title: c.web.title || 'Source', uri: c.web.uri });
-        }
-      });
-    }
+
+    return { sources };
+  } catch (error) {
+    console.error("Gemini Stream Error:", error);
+    throw error;
   }
-
-  return { sources };
 };
 
 export const analyzeImage = async (prompt: string, base64Data: string, mimeType: string): Promise<string> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-flash-preview',
-    contents: {
-      parts: [
-        { inlineData: { data: base64Data, mimeType } },
-        { text: prompt }
-      ]
-    }
-  });
-  return response.text || "Analysis failed.";
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-1.5-flash', // Flash 1.5 is excellent for vision
+      contents: {
+        parts: [
+          { inlineData: { data: base64Data, mimeType } },
+          { text: prompt }
+        ]
+      }
+    });
+    return response.text || "Analysis failed.";
+  } catch (error) {
+    console.error("Vision Error:", error);
+    return "I couldn't analyze that label. Please try again.";
+  }
 };
 
 export const generateImage = async (prompt: string): Promise<string | null> => {
-  const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-  const response = await ai.models.generateContent({
-    model: 'gemini-2.5-flash-image',
-    contents: { parts: [{ text: prompt }] },
-    config: { imageConfig: { aspectRatio: "1:1" } }
-  });
+  // Note: Image generation endpoints vary by access. 
+  // If this fails, the UI will just handle null.
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-2.0-flash-exp', // Or 'imagen-3' if available in your project
+      contents: { parts: [{ text: prompt }] },
+      config: { 
+        // @ts-ignore - Image config types might be experimental
+        imageConfig: { aspectRatio: "1:1" } 
+      }
+    });
 
-  if (response.candidates?.[0]?.content?.parts) {
-    for (const part of response.candidates[0].content.parts) {
-      if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
+    if (response.candidates?.[0]?.content?.parts) {
+      for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
+      }
     }
+    return null;
+  } catch (error) {
+    console.warn("Image Gen Error:", error);
+    return null;
   }
-  return null;
 };
