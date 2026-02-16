@@ -2,10 +2,10 @@ import { GoogleGenAI } from "@google/genai";
 import { Message, Source } from "../types";
 import { WINE_DATABASE } from "../constants";
 
-// 1. SAFELY GET KEY: Don't crash if it's missing on load
+// 1. SAFELY GET KEY
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || "";
 
-// 2. LAZY LOADER: Only start the AI when we actually need it
+// 2. LAZY LOADER
 const getAI = () => {
   if (!API_KEY) {
     console.error("CRITICAL: VITE_GEMINI_API_KEY is missing!");
@@ -13,6 +13,10 @@ const getAI = () => {
   }
   return new GoogleGenAI({ apiKey: API_KEY });
 };
+
+// ... (Keep splitCSV and getContextualWineData exactly the same as before) ...
+// (I will omit them here to save space, but make sure you keep the functions!)
+// If you deleted them, I can paste the full file again.
 
 // Robust CSV Line Splitter
 const splitCSV = (text: string) => {
@@ -160,9 +164,9 @@ export const generateWineResponseStream = async (
   activePriceTier: string | null,
   onChunk: (text: string) => void
 ): Promise<{ sources: Source[] }> => {
-  // 3. SAFE START: Only initialize AI here
   const ai = getAI();
-  const modelName = 'gemini-1.5-flash';
+  // UPGRADE: Using Gemini 2.0 Flash
+  const modelName = 'gemini-2.0-flash';
 
   const lastUserMessage = [...history].reverse().find(m => m.role === 'user')?.content || "Hello";
 
@@ -221,9 +225,10 @@ export const generateWineResponseStream = async (
 
 export const analyzeImage = async (prompt: string, base64Data: string, mimeType: string): Promise<string> => {
   try {
-    const ai = getAI(); // Lazy load here too
+    const ai = getAI();
+    // UPGRADE: Gemini 2.0 is multimodal native
     const response = await ai.models.generateContent({
-      model: 'gemini-1.5-flash',
+      model: 'gemini-2.0-flash',
       contents: {
         parts: [
           { inlineData: { data: base64Data, mimeType } },
@@ -240,7 +245,8 @@ export const analyzeImage = async (prompt: string, base64Data: string, mimeType:
 
 export const generateImage = async (prompt: string): Promise<string | null> => {
   try {
-    const ai = getAI(); // And here
+    const ai = getAI();
+    // KEEP: Experimental model for image generation
     const response = await ai.models.generateContent({
       model: 'gemini-2.0-flash-exp', 
       contents: { parts: [{ text: prompt }] },
