@@ -2,11 +2,19 @@ import { GoogleGenAI } from "@google/genai";
 import { Message, Source } from "../types";
 import { WINE_DATABASE } from "../constants";
 
-// 1. CRITICAL FIX: Use Vite environment variable
+// 1. SAFELY GET KEY: Don't crash if it's missing on load
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || "";
-const ai = new GoogleGenAI({ apiKey: API_KEY });
 
-// Robust CSV Line Splitter to handle quoted commas
+// 2. LAZY LOADER: Only start the AI when we actually need it
+const getAI = () => {
+  if (!API_KEY) {
+    console.error("CRITICAL: VITE_GEMINI_API_KEY is missing!");
+    throw new Error("API Key is missing. Please check Vercel settings.");
+  }
+  return new GoogleGenAI({ apiKey: API_KEY });
+};
+
+// Robust CSV Line Splitter
 const splitCSV = (text: string) => {
   const result = [];
   let current = '';
@@ -23,11 +31,7 @@ const splitCSV = (text: string) => {
   return result;
 };
 
-/**
- * Optimized Local Lookup (RAG-lite):
- * Reduced to Top 5 matches to prevent iPhone hanging and payload bloat.
- * Stricter keyword matching ensures higher relevance.
- */
+// Optimized Local Lookup (RAG-lite)
 const getContextualWineData = (
   customKb: string | null, 
   activeRetailers: string[], 
@@ -37,7 +41,7 @@ const getContextualWineData = (
 ) => {
   let sourceData: any[] = [];
 
-  // 1. Load Data efficiently
+  // Load Data
   if (customKb) {
     const rawLines = customKb.split(/\r?\n/).map(l => l.trim()).filter(l => l !== "");
     if (rawLines.length > 1) {
@@ -66,7 +70,7 @@ const getContextualWineData = (
     sourceData = WINE_DATABASE;
   }
 
-  // 2. High-Performance Filtering Logic
+  // Filter Data
   let filtered = sourceData;
 
   if (activeRetailers.length > 0) {
@@ -87,7 +91,7 @@ const getContextualWineData = (
     }
   }
 
-  // 3. Stricter Relevancy Ranking
+  // Rank Data
   const query = userQuery.toLowerCase();
   const keywords = query.split(/[\s,]+/).filter(k => k.length > 3 && !['wine', 'best', 'find', 'with', 'what'].includes(k));
   
@@ -109,7 +113,6 @@ const getContextualWineData = (
     return "";
   }
 
-  // 4. Data Capping: Only send top 5 matches
   return filtered.slice(0, 5).map(w => 
     `${w.name}|£${w.price}|${w.retailer}|${w.rating}|${w.tags}`
   ).join('\n');
@@ -134,8 +137,7 @@ You are Vintellect, an elite UK Sommelier. Tone: Expert, Authoritative, British 
 STRICT SEARCH & PERFORMANCE RULES:
 1. ANALYZE IMPLIED QUALITY: Determine if the user is asking for "Everyday" or "Fine Wine".
    - IF <£15 or "Everyday": Use Google Search to check Waitrose, Majestic, and Tesco.
-   - IF >£15, "Fine", or "Special Occasion": You MUST search specialist UK merchants (Berry Bros & Rudd, The Wine Society, Lay & Wheeler) and cross-reference reviews from Decanter or Jancis Robinson.
-   - FORBIDDEN: Do NOT recommend generic "supermarket own-brand" wines for Fine Wine/Premium requests (e.g., if asking for a Pauillac alternative, do not suggest a basic Tesco red).
+   - IF >£15, "Fine", or "Special Occasion": You MUST search specialist UK merchants (Berry Bros & Rudd, The Wine Society, Lay & Wheeler).
 
 2. HONESTY & OUTPUT FORMAT:
    - Use the Top 5 local matches below ONLY if they are highly relevant.
@@ -148,7 +150,6 @@ ${dbContext || "No strong local matches."}
 CONSTRAINTS:
 - ${retailerConstraint}
 - BOLDING: Use [B]text[/B] tags. NO asterisks (**).
-- If user provides [CURRENT MARKET DATA], prioritize value comparisons.
 `;
 };
 
@@ -159,16 +160,15 @@ export const generateWineResponseStream = async (
   activePriceTier: string | null,
   onChunk: (text: string) => void
 ): Promise<{ sources: Source[] }> => {
-  // 2. CRITICAL FIX: Stable Model Name
+  // 3. SAFE START: Only initialize AI here
+  const ai = getAI();
   const modelName = 'gemini-1.5-flash';
 
   const lastUserMessage = [...history].reverse().find(m => m.role === 'user')?.content || "Hello";
 
-  // 3. CRITICAL FIX: Correct Message Format for Gemini 1.5
   const contents = history.map(msg => {
     const parts: any[] = [{ text: msg.content || "" }];
     if (msg.imageUrl) {
-      // Handle Base64 images correctly
       const matches = msg.imageUrl.match(/^data:(.+);base64,(.+)$/);
       if (matches) {
         parts.push({ 
@@ -221,8 +221,9 @@ export const generateWineResponseStream = async (
 
 export const analyzeImage = async (prompt: string, base64Data: string, mimeType: string): Promise<string> => {
   try {
+    const ai = getAI(); // Lazy load here too
     const response = await ai.models.generateContent({
-      model: 'gemini-1.5-flash', // Flash 1.5 is excellent for vision
+      model: 'gemini-1.5-flash',
       contents: {
         parts: [
           { inlineData: { data: base64Data, mimeType } },
@@ -238,14 +239,13 @@ export const analyzeImage = async (prompt: string, base64Data: string, mimeType:
 };
 
 export const generateImage = async (prompt: string): Promise<string | null> => {
-  // Note: Image generation endpoints vary by access. 
-  // If this fails, the UI will just handle null.
   try {
+    const ai = getAI(); // And here
     const response = await ai.models.generateContent({
-      model: 'gemini-2.0-flash-exp', // Or 'imagen-3' if available in your project
+      model: 'gemini-2.0-flash-exp', 
       contents: { parts: [{ text: prompt }] },
       config: { 
-        // @ts-ignore - Image config types might be experimental
+        // @ts-ignore
         imageConfig: { aspectRatio: "1:1" } 
       }
     });
