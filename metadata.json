@@ -1,0 +1,8 @@
+{
+  "name": "Vintellect 2.0",
+  "description": "A high-performance AI intelligence hub featuring advanced multi-modal capabilities including real-time search, vision analysis, and high-fidelity image generation powered by Gemini.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
