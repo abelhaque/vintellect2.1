@@ -18,7 +18,7 @@ const App: React.FC = () => {
   const [showApp, setShowApp] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   
-  // LIVE MODE: 'off', 'voice' (Sommelier), or 'chat' (Text History)
+  // Mode state: 'off', 'voice' (Live Sommelier), or 'chat' (Live History View)
   const [liveMode, setLiveMode] = useState<'off' | 'voice' | 'chat'>('off');
   
   const [isTyping, setIsTyping] = useState(false);
@@ -30,7 +30,8 @@ const App: React.FC = () => {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [viewportHeight, setViewportHeight] = useState<number>(window.innerHeight);
   
-  // PERMISSION STATE: Tracks if we successfully unlocked hardware
+  // --- HARDWARE & PERMISSION STATE ---
+  const [userMediaStream, setUserMediaStream] = useState<MediaStream | null>(null);
   const [permissionError, setPermissionError] = useState(false);
   
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -51,6 +52,8 @@ const App: React.FC = () => {
     }
     return [WELCOME_MESSAGE];
   });
+
+  // --- 1. VIEWPORT & MOBILE KEYBOARD FIXES ---
 
   useEffect(() => {
     const handleVisualViewportResize = () => {
@@ -75,6 +78,32 @@ const App: React.FC = () => {
       window.removeEventListener('resize', handleVisualViewportResize);
     };
   }, []);
+
+  // --- 2. THE HARDWARE HANDSHAKE (STUDIO STYLE) ---
+
+  const handleEnterCellar = async () => {
+    try {
+      // Step A: Request Media Access upfront to "warm up" hardware
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+      
+      // Step B: Save the stream for the LiveSommelier component handoff
+      setUserMediaStream(stream);
+
+      // Step C: Initialize audio context & sounds
+      getAudioContext().then(() => {
+        playUpscaleJingle();
+        triggerHaptic(20);
+        setShowApp(true);
+      });
+    } catch (err) {
+      console.error("Hardware denied:", err);
+      setPermissionError(true);
+      // We still let them in, but features like Voice will be disabled
+      setShowApp(true); 
+    }
+  };
+
+  // --- 3. AUDIO SYNTHESIS ENGINE (FULL RECONSTRUCTION) ---
 
   const getAudioContext = useCallback(async () => {
     if (!audioContextRef.current) {
@@ -213,6 +242,7 @@ const App: React.FC = () => {
     const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
     const output = noiseBuffer.getChannelData(0);
 
+    // RESTORED: Full Pink Noise synthesis algorithm
     let b0, b1, b2, b3, b4, b5, b6;
     b0 = b1 = b2 = b3 = b4 = b5 = b6 = 0.0;
     for (let i = 0; i < bufferSize; i++) {
@@ -246,33 +276,143 @@ const App: React.FC = () => {
     noiseSource.stop(now + 0.25);
   };
 
-  // --- THE GLOBAL HARDWARE UNLOCK ---
-  const handleEnterCellar = async () => {
-    try {
-      // 1. Trigger the Permission Popup Immediately
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        audio: true, 
-        video: true // Asking for video too matches AI Studio and is more likely to 'stick'
-      });
-      
-      // 2. Stop tracks to save battery, but keep permission 'granted'
-      stream.getTracks().forEach(track => track.stop());
+  // --- 4. CORE MESSAGING & RESEARCH LOGIC ---
 
-      // 3. Warm up the AudioContext (Critical for iOS)
-      const ctx = await getAudioContext();
-      if (ctx) {
-        playUpscaleJingle();
-        triggerHaptic(20);
+  const handleSendMessage = useCallback(async (content: string, imageUrl?: string, displayContent?: string) => {
+    if (!content.trim() && !imageUrl) return;
+
+    getAudioContext();
+
+    const userMessage: Message = { 
+      id: Date.now().toString(), 
+      role: 'user', 
+      content: content, 
+      displayContent: displayContent,
+      timestamp: new Date(), 
+      imageUrl: imageUrl 
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    setIsTyping(true);
+    setLatencyNotice(null);
+
+    const latencyTimer = setTimeout(() => {
+      setLatencyNotice('Consulting the global experts... almost there');
+    }, 3000);
+
+    const assistantId = (Date.now() + 1).toString();
+    setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: '', timestamp: new Date() }]);
+
+    try {
+      const { sources } = await generateWineResponseStream(
+        [...messages, userMessage], activeSupermarkets, activeWineTypes, activePriceTier,
+        (currentText) => {
+          if (cyclerRef.current) {
+            clearInterval(cyclerRef.current);
+            cyclerRef.current = null;
+            setStatusMessage(null);
+          }
+          setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: currentText } : m));
+        }
+      );
+      setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, sources } : m));
+    } catch (error) {
+      console.error("Vintellect Sommelier Error:", error);
+      setMessages(prev => prev.map(m => m.id === assistantId ? { 
+        ...m, 
+        content: "I've dropped a bottle. Connection hiccup. Please try again.", 
+        isError: true,
+        retryData: { prompt: content, image: imageUrl }
+      } : m));
+    } finally { 
+      if (cyclerRef.current) {
+        clearInterval(cyclerRef.current);
+        cyclerRef.current = null;
+      }
+      setStatusMessage(null);
+      clearTimeout(latencyTimer);
+      setIsTyping(false); 
+      setLatencyNotice(null);
+    }
+  }, [messages, activeSupermarkets, activeWineTypes, activePriceTier, getAudioContext]);
+
+  // RESTORED: Full Technical Prompt Construction logic for Wine Clicks
+  const handleWineClick = (wine: Wine) => {
+    if (window.innerWidth < 1024) setIsSidebarOpen(false);
+    getAudioContext();
+    
+    const isFineWine = wine.price > 15 || wine.tags.toLowerCase().includes('premium') || wine.tags.toLowerCase().includes('prestige');
+    const researchTarget = isFineWine ? "specialist fine wine merchants and critics" : "supermarket inventories";
+    
+    setIsTyping(true);
+    setStatusMessage(`Vincent is scanning ${researchTarget}...`);
+    
+    if (cyclerRef.current) clearInterval(cyclerRef.current);
+
+    setTimeout(() => {
+      // Step A: Stricter Local CSV Scan (Keyword Match in JS)
+      const queryKeywords = (wine.tags + " " + wine.type).toLowerCase().split(/[\s,]+/).filter(k => k.length > 3);
+      const localMatches = WINE_DATABASE.filter(w => {
+        if (w.name === wine.name) return false;
+        const wText = (w.name + " " + w.tags + " " + w.type).toLowerCase();
+        return queryKeywords.some(k => wText.includes(k));
+      }).slice(0, 5);
+
+      // Step B: Logic Expansion & 'Web-First' Trigger
+      let internetFallbackInstruction = "";
+      if (localMatches.length < 3) {
+        const qualityPrefix = isFineWine ? "Fine wine" : "Everyday";
+        setStatusMessage(`Cellar empty. Checking global ${qualityPrefix} records...`);
+        internetFallbackInstruction = `IMPORTANT: My local cellar matches for [B]${wine.type}[/B] or [B]${wine.tags}[/B] are POOR. 
+        You MUST ignore the limited local data and search the wider internet for the best alternative. 
+        If premium, use specialist merchants like BBR/Wine Society and Decanter. If everyday, use UK supermarkets.`;
+      } else {
+        setStatusMessage("Consulting the cellar database...");
       }
 
-      setShowApp(true);
-    } catch (err) {
-      console.error("Hardware permission denied:", err);
-      setPermissionError(true);
-      // We allow entry, but features will be degraded
-      setShowApp(true); 
-    }
+      const marketData = `[CURRENT MARKET DATA: ${wine.retailer} - £${wine.price}]`;
+      const qualityContext = isFineWine ? "QUALITY: Fine Wine / Special Occasion." : "QUALITY: Everyday / Value.";
+      const honestyClause = `HONESTY CLAUSE: If you cannot find a direct match in the cellar data, state: "My cellar is out of ${wine.type}, but Decanter highly rates the [Wine Name] (£Price) available at [Merchant]."`;
+      
+      const technicalPrompt = `
+        Detailed analysis for [B]${wine.name}[/B]. ${marketData}. 
+        ${qualityContext}
+        ${honestyClause}
+        ${internetFallbackInstruction}
+        
+        Style Context: ${wine.type}, ${wine.tags}.
+        Search the web to provide a high-authority alternative.
+      `;
+
+      const uiDisplayMessage = `Analyzing ${wine.name} and finding a high-authority alternative...`;
+      handleSendMessage(technicalPrompt, undefined, uiDisplayMessage);
+    }, 100);
   };
+
+  const addToCellar = (wine: Wine) => {
+    playBookmarkChime();
+    setCellar(prev => {
+      const exists = prev.some(w => w.name === wine.name);
+      if (exists) return prev;
+      return [...prev, wine];
+    });
+  };
+
+  const removeFromCellar = (name: string) => {
+    setCellar(prev => prev.filter(w => w.name !== name));
+  };
+
+  const clearHistory = () => {
+    getAudioContext().then(() => {
+      playTrashSound();
+      triggerHaptic([30, 50, 30]);
+      localStorage.removeItem('vintellect_chat_history');
+      setMessages([WELCOME_MESSAGE]);
+      if (window.innerWidth < 1024) setIsSidebarOpen(false);
+    });
+  };
+
+  // --- 5. PERSISTENCE & GLOBAL EFFECTS ---
 
   useEffect(() => {
     let wakeLock: any = null;
@@ -315,142 +455,6 @@ const App: React.FC = () => {
     localStorage.setItem('vintellect_chat_history', JSON.stringify(messages));
   }, [messages]);
 
-  const handleSendMessage = useCallback(async (content: string, imageUrl?: string, displayContent?: string) => {
-    if (!content.trim() && !imageUrl) return;
-
-    getAudioContext();
-
-    const userMessage: Message = { 
-      id: Date.now().toString(), 
-      role: 'user', 
-      content: content, 
-      displayContent: displayContent,
-      timestamp: new Date(), 
-      imageUrl: imageUrl 
-    };
-
-    setMessages(prev => [...prev, userMessage]);
-    setIsTyping(true);
-    setLatencyNotice(null);
-
-    const latencyTimer = setTimeout(() => {
-      setLatencyNotice('Still searching the cellars... almost there');
-    }, 3000);
-
-    const assistantId = (Date.now() + 1).toString();
-    setMessages(prev => [...prev, { id: assistantId, role: 'assistant', content: '', timestamp: new Date() }]);
-
-    try {
-      const { sources } = await generateWineResponseStream(
-        [...messages, userMessage], activeSupermarkets, activeWineTypes, activePriceTier,
-        (currentText) => {
-          if (cyclerRef.current) {
-            clearInterval(cyclerRef.current);
-            cyclerRef.current = null;
-            setStatusMessage(null);
-          }
-          setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: currentText } : m));
-        }
-      );
-      setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, sources } : m));
-    } catch (error) {
-      console.error("Vintellect Sommelier Error:", error);
-      setMessages(prev => prev.map(m => m.id === assistantId ? { 
-        ...m, 
-        content: "Connection hiccup. Please try asking that again.", 
-        isError: true,
-        retryData: { prompt: content, image: imageUrl }
-      } : m));
-    } finally { 
-      if (cyclerRef.current) {
-        clearInterval(cyclerRef.current);
-        cyclerRef.current = null;
-      }
-      setStatusMessage(null);
-      clearTimeout(latencyTimer);
-      setIsTyping(false); 
-      setLatencyNotice(null);
-    }
-  }, [messages, activeSupermarkets, activeWineTypes, activePriceTier, getAudioContext]);
-
-  const handleWineClick = (wine: Wine) => {
-    if (window.innerWidth < 1024) setIsSidebarOpen(false);
-    getAudioContext();
-    
-    // Determine quality tier based on price/tags for research signaling
-    const isFineWine = wine.price > 15 || wine.tags.toLowerCase().includes('premium') || wine.tags.toLowerCase().includes('prestige');
-    const researchTarget = isFineWine ? "specialist fine wine merchants and critics" : "supermarket inventories";
-    
-    // Immediate Research Feedback
-    setIsTyping(true);
-    setStatusMessage(`Vincent is scanning ${researchTarget}...`);
-    
-    if (cyclerRef.current) clearInterval(cyclerRef.current);
-
-    // Yield main thread to prevent Safari lockup
-    setTimeout(() => {
-      // Step A: Stricter Local CSV Scan (Keyword Match in JS)
-      const queryKeywords = (wine.tags + " " + wine.type).toLowerCase().split(/[\s,]+/).filter(k => k.length > 3);
-      const localMatches = WINE_DATABASE.filter(w => {
-        if (w.name === wine.name) return false;
-        const wText = (w.name + " " + w.tags + " " + w.type).toLowerCase();
-        return queryKeywords.some(k => wText.includes(k));
-      }).slice(0, 5);
-
-      // Step B: Logic Expansion & 'Web-First' Trigger
-      let internetFallbackInstruction = "";
-      if (localMatches.length < 3) {
-        const qualityPrefix = isFineWine ? "Fine wine" : "Everyday";
-        setStatusMessage(`Cellar empty. Checking global ${qualityPrefix} records...`);
-        internetFallbackInstruction = `IMPORTANT: My local cellar matches for [B]${wine.type}[/B] or [B]${wine.tags}[/B] are POOR. 
-        You MUST ignore the limited local data and search the wider internet for the best alternative. 
-        If premium, use specialist merchants and Decanter. If everyday, use supermarkets.`;
-      } else {
-        setStatusMessage("Consulting the cellar database...");
-      }
-
-      const marketData = `[CURRENT MARKET DATA: ${wine.retailer} - £${wine.price}]`;
-      const qualityContext = isFineWine ? "QUALITY: Fine Wine / Special Occasion." : "QUALITY: Everyday / Value.";
-      const honestyClause = `HONESTY CLAUSE: If you cannot find a direct match in the cellar data, state: "My cellar is out of ${wine.type}, but Decanter highly rates the [Wine Name] (£Price) available at [Merchant]."`;
-      
-      const technicalPrompt = `
-        Detailed analysis for [B]${wine.name}[/B]. ${marketData}. 
-        ${qualityContext}
-        ${honestyClause}
-        ${internetFallbackInstruction}
-        
-        Style Context: ${wine.type}, ${wine.tags}.
-        Search the web to provide a high-authority alternative (BBR/Wine Society for fine, Supermarkets for everyday).
-      `;
-
-      const uiDisplayMessage = `Analyzing ${wine.name} and finding a high-authority alternative...`;
-      handleSendMessage(technicalPrompt, undefined, uiDisplayMessage);
-    }, 100);
-  };
-
-  const addToCellar = (wine: Wine) => {
-    playBookmarkChime();
-    setCellar(prev => {
-      const exists = prev.some(w => w.name === wine.name);
-      if (exists) return prev;
-      return [...prev, wine];
-    });
-  };
-
-  const removeFromCellar = (name: string) => {
-    setCellar(prev => prev.filter(w => w.name !== name));
-  };
-
-  const clearHistory = () => {
-    getAudioContext().then(() => {
-      playTrashSound();
-      triggerHaptic([30, 50, 30]);
-      localStorage.removeItem('vintellect_chat_history');
-      setMessages([WELCOME_MESSAGE]);
-      if (window.innerWidth < 1024) setIsSidebarOpen(false);
-    });
-  };
-
   useEffect(() => {
     const handleResize = () => {
       if (window.innerWidth < 1024) setIsSidebarOpen(false);
@@ -467,21 +471,25 @@ const App: React.FC = () => {
     return () => window.removeEventListener('click', unlock);
   }, [getAudioContext]);
 
+  // --- 6. RENDER ENGINE ---
+
   return (
     <div 
       className="w-full overflow-hidden bg-[#F7E1A1] relative"
       style={{ height: `${viewportHeight}px` }}
     >
-      {/* FINAL SYNC: Live Sommelier now shares brain and state with main app */}
+      {/* HANDOFF: We pass the 'userMediaStream' obtained at the splash screen 
+          directly to the LiveSommelier. 
+      */}
       {liveMode !== 'off' && (
         <LiveSommelier 
+          preAuthorizedStream={userMediaStream}
           isChatMode={liveMode === 'chat'} 
           onClose={() => setLiveMode('off')} 
           onSwitchMode={() => setLiveMode(prev => prev === 'voice' ? 'chat' : 'voice')}
           activeSupermarkets={activeSupermarkets}
           activeWineTypes={activeWineTypes}
           activePriceTier={activePriceTier}
-          // Bridging the brain
           messages={messages}
           handleSendMessage={handleSendMessage}
           isTyping={isTyping}
@@ -489,9 +497,9 @@ const App: React.FC = () => {
       )}
       
       {!showApp ? (
-        <div className="fixed inset-0 bg-[#800020] flex flex-col items-center justify-center p-6 z-[100] overflow-hidden">
+        <div className="fixed inset-0 bg-[#800020] flex flex-col items-center justify-center p-6 z-[100] overflow-hidden text-center">
           <div className="absolute inset-0 opacity-10 bg-[url('https://www.transparenttextures.com/patterns/pinstripe-dark.png')]"></div>
-          <div className="relative z-10 flex flex-col items-center text-center space-y-12 animate-in fade-in zoom-in duration-1000">
+          <div className="relative z-10 flex flex-col items-center space-y-12 animate-in fade-in zoom-in duration-1000">
             <div className="p-6 rounded-full bg-[#F7E1A1]/10 border border-[#F7E1A1]/20 shadow-2xl">
               <WineIcon size={80} className="text-[#F7E1A1]" />
             </div>
@@ -511,7 +519,7 @@ const App: React.FC = () => {
               
               {permissionError && (
                 <p className="text-red-300 text-[10px] font-bold uppercase tracking-widest animate-pulse">
-                   Mic & Camera access required for the full experience.
+                   Mic & Camera access required to consult the cellar.
                 </p>
               )}
             </div>
@@ -560,7 +568,6 @@ const App: React.FC = () => {
                     <Trash2 size={20} />
                   </button>
                   <button 
-                    // UPDATED: Triggers Voice Mode by default
                     onClick={() => setLiveMode('voice')}
                     className="flex items-center gap-2 bg-[#F7E1A1] text-[#800020] hover:bg-white px-5 py-2 rounded-full transition-all text-sm font-bold shadow-lg"
                   >
