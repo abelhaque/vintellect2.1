@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Wine, Search, Sparkles, X, Camera, Mic } from 'lucide-react';
-import { generateWineResponseStream, analyzeImage, generateImage } from '../services/geminiService';
+import { Send, Wine, Sparkles, Camera } from 'lucide-react';
+import { generateWineResponseStream, analyzeImage } from '../services/geminiService';
 import { Message, Source } from '../types';
 
 interface LiveSommelierProps {
@@ -10,11 +10,10 @@ interface LiveSommelierProps {
 }
 
 const LiveSommelier: React.FC<LiveSommelierProps> = ({
-  activeSupermarkets,
-  activeWineTypes,
-  activePriceTier
+  activeSupermarkets = [],
+  activeWineTypes = [],
+  activePriceTier = null
 }) => {
-  // FIX: Timestamps must be Date objects, not numbers
   const [messages, setMessages] = useState<Message[]>([
     { 
       id: 'init-1',
@@ -29,8 +28,11 @@ const LiveSommelier: React.FC<LiveSommelierProps> = ({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // FIX: The "Safe Scroll" that prevents the crash
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    setTimeout(() => {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, 100);
   };
 
   useEffect(() => {
@@ -40,7 +42,6 @@ const LiveSommelier: React.FC<LiveSommelierProps> = ({
   const handleSend = async () => {
     if (!input.trim() && !isLoading) return;
 
-    // FIX: Use new Date()
     const userMsg: Message = { 
       id: Date.now().toString(),
       role: 'user', 
@@ -53,7 +54,6 @@ const LiveSommelier: React.FC<LiveSommelierProps> = ({
     setIsLoading(true);
     setSources([]);
 
-    // FIX: Use new Date()
     const assistantMsg: Message = { 
       id: (Date.now() + 1).toString(),
       role: 'assistant', 
@@ -73,7 +73,6 @@ const LiveSommelier: React.FC<LiveSommelierProps> = ({
           setMessages(prev => {
             const newHistory = [...prev];
             const lastMsg = newHistory[newHistory.length - 1];
-            
             if (lastMsg.role === 'assistant') {
               newHistory[newHistory.length - 1] = {
                 ...lastMsg,
@@ -86,14 +85,15 @@ const LiveSommelier: React.FC<LiveSommelierProps> = ({
         }
       );
       setSources(newSources);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Chat Error:", error);
+      const errorMessage = error?.message || "Unknown error";
       setMessages(prev => {
         const newHistory = [...prev];
         const lastMsg = newHistory[newHistory.length - 1];
         newHistory[newHistory.length - 1] = {
           ...lastMsg,
-          content: lastMsg.content + "\n\n[Connection hiccup. Please try asking that again.]"
+          content: lastMsg.content + `\n\n[System Error: ${errorMessage}. Please try again.]`
         };
         return newHistory;
       });
@@ -109,7 +109,6 @@ const LiveSommelier: React.FC<LiveSommelierProps> = ({
     const reader = new FileReader();
     reader.onloadend = async () => {
       const base64String = reader.result as string;
-      
       const userMsg: Message = { 
         id: Date.now().toString(),
         role: 'user', 
@@ -123,7 +122,6 @@ const LiveSommelier: React.FC<LiveSommelierProps> = ({
 
       try {
         const analysis = await analyzeImage("Analyze this wine label. Identify the producer, vintage, and grape.", base64String.split(',')[1], file.type);
-        
         setMessages(prev => [...prev, { 
           id: (Date.now() + 1).toString(),
           role: 'assistant', 
@@ -145,9 +143,12 @@ const LiveSommelier: React.FC<LiveSommelierProps> = ({
   };
 
   return (
-    <div className="flex flex-col h-[600px] bg-white rounded-xl shadow-lg border border-stone-200 overflow-hidden">
-      {/* Header */}
-      <div className="bg-stone-900 text-amber-50 p-4 flex justify-between items-center">
+    // FIX: Strict height + safe rendering for Mobile
+    <div 
+      className="flex flex-col bg-white rounded-xl shadow-lg border border-stone-200 overflow-hidden"
+      style={{ height: '600px', maxHeight: '80vh' }}
+    >
+      <div className="bg-stone-900 text-amber-50 p-4 flex justify-between items-center shrink-0">
         <div className="flex items-center gap-2">
           <Wine className="w-5 h-5 text-amber-400" />
           <h2 className="font-serif font-semibold">Live Sommelier</h2>
@@ -157,8 +158,7 @@ const LiveSommelier: React.FC<LiveSommelierProps> = ({
         </div>
       </div>
 
-      {/* Messages Area */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-stone-50">
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-stone-50 min-h-0">
         {messages.map((msg) => (
           <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
             <div className={`max-w-[85%] rounded-lg p-3 ${
@@ -182,9 +182,8 @@ const LiveSommelier: React.FC<LiveSommelierProps> = ({
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Sources / Grounding */}
       {sources.length > 0 && (
-        <div className="px-4 py-2 bg-stone-100 text-xs border-t border-stone-200 flex gap-2 overflow-x-auto">
+        <div className="px-4 py-2 bg-stone-100 text-xs border-t border-stone-200 flex gap-2 overflow-x-auto shrink-0">
           <span className="font-semibold text-stone-500">Sources:</span>
           {sources.map((src, i) => (
             <a key={i} href={src.uri} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline truncate max-w-[150px]">
@@ -194,8 +193,7 @@ const LiveSommelier: React.FC<LiveSommelierProps> = ({
         </div>
       )}
 
-      {/* Input Area */}
-      <div className="p-4 bg-white border-t border-stone-200">
+      <div className="p-4 bg-white border-t border-stone-200 shrink-0">
         <div className="flex gap-2">
           <button 
             onClick={() => fileInputRef.current?.click()}
@@ -210,17 +208,15 @@ const LiveSommelier: React.FC<LiveSommelierProps> = ({
             accept="image/*" 
             onChange={handleFileUpload}
           />
-          
           <input
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-            placeholder="Ask about wines, pairings, or upload a label..."
+            placeholder="Ask about wines..."
             className="flex-1 bg-stone-100 border-none rounded-full px-4 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none"
             disabled={isLoading}
           />
-          
           <button 
             onClick={handleSend}
             disabled={isLoading || !input.trim()}
