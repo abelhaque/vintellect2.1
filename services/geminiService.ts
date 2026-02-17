@@ -1,9 +1,8 @@
-// 1. IMPORT FIX: matching your package.json
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { Message, Source } from "../types";
 import { WINE_DATABASE } from "../constants";
 
-// 2. SAFELY GET KEY
+// 1. SAFELY GET KEY
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || "";
 
 const getAI = () => {
@@ -118,25 +117,36 @@ export const generateWineResponseStream = async (
   onChunk: (text: string) => void
 ): Promise<{ sources: Source[] }> => {
   const genAI = getAI();
-  
-  // 3. MODEL FIX: Using standard stable model ID
   const model = genAI.getGenerativeModel({ 
     model: "gemini-1.5-flash",
     systemInstruction: getSystemInstruction(activeSupermarkets, activeWineTypes, activePriceTier, ""),
   });
 
+  // --- CRITICAL FIX START ---
+  // 1. Extract the current user message (the very last one)
+  const lastUserMessage = [...history].reverse().find(m => m.role === 'user')?.content || "Hello";
+
+  // 2. Prepare Valid History (Exclude the new message AND the initial 'Hello' greeting)
+  // We filter out the first message if it is from the assistant (the greeting)
+  // We also slice(0, -1) to remove the current user message (because we send it separately in sendMessageStream)
+  const validHistory = history.slice(0, -1).filter((msg, index) => {
+    // If it's the very first message and it's from the assistant, DROP IT.
+    if (index === 0 && msg.role === 'assistant') return false;
+    return true;
+  }).map(msg => ({
+    role: msg.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: msg.content || "" }]
+  }));
+  // --- CRITICAL FIX END ---
+
   const chat = model.startChat({
-    history: history.map(msg => ({
-      role: msg.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: msg.content || "" }]
-    })),
+    history: validHistory, // Now perfectly clean (starts with User or is empty)
     generationConfig: {
       temperature: 0.1,
     }
   });
 
   try {
-    const lastUserMessage = [...history].reverse().find(m => m.role === 'user')?.content || "Hello";
     const result = await chat.sendMessageStream(lastUserMessage);
 
     let fullText = "";
