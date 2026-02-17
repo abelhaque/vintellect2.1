@@ -1,7 +1,7 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { Send, Wine, Sparkles, Camera, X } from 'lucide-react';
-import { generateWineResponseStream, analyzeImage } from '../services/geminiService';
-import { Message, Source } from '../types';
+import React, { useState, useEffect, useRef } from 'react';
+import { Mic, MicOff, X, Wine, Volume2, VolumeX } from 'lucide-react';
+import { generateWineResponseStream } from '../services/geminiService';
+import { Message } from '../types';
 
 interface LiveSommelierProps {
   activeSupermarkets: string[];
@@ -14,226 +14,175 @@ const LiveSommelier: React.FC<LiveSommelierProps> = ({
   activeWineTypes = [],
   activePriceTier = null
 }) => {
-  const [messages, setMessages] = useState<Message[]>([
-    { 
-      id: 'init-1',
-      role: 'assistant', 
-      content: "Hello! I am Vintellect. Tell me what you're eating or what you like, and I'll check the local cellars for you.",
-      timestamp: new Date()
-    }
-  ]);
-  const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [sources, setSources] = useState<Source[]>([]);
+  // Simple State
+  const [status, setStatus] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
+  const [transcript, setTranscript] = useState("Tap the microphone to speak to Vintellect.");
+  const [audioEnabled, setAudioEnabled] = useState(true);
   
-  // REMOVED: The automatic scroll-on-load that was crashing the app
-  const messagesEndRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // History is kept in memory for context, but NOT rendered (prevents crash)
+  const historyRef = useRef<Message[]>([
+    { role: 'assistant', content: "Hello. I am listening.", id: 'init', timestamp: new Date() }
+  ]);
 
-  // SAFE SCROLL: Only scroll when messages change, and do it gently
+  // Speech Recognition Setup (Web Standard)
+  const recognitionRef = useRef<any>(null);
+
   useEffect(() => {
-    if (messages.length > 1) { // Don't scroll on initial load
-      const timeoutId = setTimeout(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      }, 500); // 500ms delay to let the keyboard/UI settle
-      return () => clearTimeout(timeoutId);
-    }
-  }, [messages]);
-
-  const handleSend = async () => {
-    if (!input.trim() && !isLoading) return;
-
-    const userMsg: Message = { 
-      id: Date.now().toString(),
-      role: 'user', 
-      content: input,
-      timestamp: new Date()
-    };
-
-    setMessages(prev => [...prev, userMsg]);
-    setInput('');
-    setIsLoading(true);
-    setSources([]);
-
-    const assistantMsg: Message = { 
-      id: (Date.now() + 1).toString(),
-      role: 'assistant', 
-      content: '',
-      timestamp: new Date()
-    };
+    // @ts-ignore - Handle browser prefixes
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     
-    setMessages(prev => [...prev, assistantMsg]);
+    if (SpeechRecognition) {
+      const recognition = new SpeechRecognition();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = 'en-GB'; // British English for the Sommelier vibe
+
+      recognition.onstart = () => setStatus('listening');
+      
+      recognition.onresult = (event: any) => {
+        const text = event.results[0][0].transcript;
+        handleUserVoiceInput(text);
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error("Speech Error:", event.error);
+        setStatus('idle');
+        setTranscript("I didn't quite catch that. Tap to try again.");
+      };
+
+      recognition.onend = () => {
+        if (status === 'listening') setStatus('idle');
+      };
+
+      recognitionRef.current = recognition;
+    } else {
+      setTranscript("Voice not supported on this browser.");
+    }
+  }, []);
+
+  const speak = (text: string) => {
+    if (!audioEnabled || !window.speechSynthesis) return;
+    
+    // Stop any current speech
+    window.speechSynthesis.cancel();
+
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = 'en-GB'; // British Voice
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+    
+    utterance.onstart = () => setStatus('speaking');
+    utterance.onend = () => setStatus('idle');
+
+    window.speechSynthesis.speak(utterance);
+  };
+
+  const handleUserVoiceInput = async (text: string) => {
+    setTranscript(`"${text}"`);
+    setStatus('thinking');
+
+    // Add to history
+    const userMsg: Message = { 
+      id: Date.now().toString(), 
+      role: 'user', 
+      content: text, 
+      timestamp: new Date() 
+    };
+    historyRef.current.push(userMsg);
 
     try {
-      const { sources: newSources } = await generateWineResponseStream(
-        [...messages, userMsg],
+      let fullResponse = "";
+      
+      // Call Gemini Brain (The Text-to-Text part)
+      await generateWineResponseStream(
+        historyRef.current,
         activeSupermarkets,
         activeWineTypes,
         activePriceTier,
-        (chunkText) => {
-          setMessages(prev => {
-            const newHistory = [...prev];
-            const lastMsg = newHistory[newHistory.length - 1];
-            if (lastMsg.role === 'assistant') {
-              newHistory[newHistory.length - 1] = {
-                ...lastMsg,
-                content: chunkText,
-                timestamp: lastMsg.timestamp || new Date()
-              };
-            }
-            return newHistory;
-          });
+        (chunk) => {
+          // We just collect the text here, we don't render it live to avoid complexity
+          fullResponse = chunk;
         }
       );
-      setSources(newSources);
-    } catch (error: any) {
-      console.error("Chat Error:", error);
-      const errorMessage = error?.message || "Unknown error";
-      setMessages(prev => {
-        const newHistory = [...prev];
-        const lastMsg = newHistory[newHistory.length - 1];
-        newHistory[newHistory.length - 1] = {
-          ...lastMsg,
-          content: lastMsg.content + `\n\n[System Error: ${errorMessage}. Please try again.]`
-        };
-        return newHistory;
+
+      // Add response to history
+      historyRef.current.push({
+        id: (Date.now() + 1).toString(),
+        role: 'assistant',
+        content: fullResponse,
+        timestamp: new Date()
       });
-    } finally {
-      setIsLoading(false);
+
+      // Speak the result
+      // Clean up bold tags for speech
+      const cleanText = fullResponse.replace(/\[\/?B\]/g, ''); 
+      setTranscript(cleanText); // Show subtitle
+      speak(cleanText); // Speak audio
+
+    } catch (error) {
+      setTranscript("I lost connection to the cellar. Please try again.");
+      setStatus('idle');
     }
   };
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onloadend = async () => {
-      const base64String = reader.result as string;
-      const userMsg: Message = { 
-        id: Date.now().toString(),
-        role: 'user', 
-        content: "Analyze this label", 
-        imageUrl: base64String,
-        timestamp: new Date()
-      };
-      
-      setMessages(prev => [...prev, userMsg]);
-      setIsLoading(true);
-
-      try {
-        const analysis = await analyzeImage("Analyze this wine label. Identify the producer, vintage, and grape.", base64String.split(',')[1], file.type);
-        setMessages(prev => [...prev, { 
-          id: (Date.now() + 1).toString(),
-          role: 'assistant', 
-          content: analysis,
-          timestamp: new Date()
-        }]);
-      } catch (error) {
-        setMessages(prev => [...prev, { 
-          id: (Date.now() + 1).toString(),
-          role: 'assistant', 
-          content: "I had trouble reading that image. Try a clearer photo.",
-          timestamp: new Date()
-        }]);
-      } finally {
-        setIsLoading(false);
-      }
-    };
-    reader.readAsDataURL(file);
+  const toggleListening = () => {
+    if (status === 'listening') {
+      recognitionRef.current?.stop();
+    } else if (status === 'speaking') {
+      window.speechSynthesis.cancel();
+      setStatus('idle');
+    } else {
+      recognitionRef.current?.start();
+    }
   };
 
   return (
-    // FIX: Using a simple, fixed-height block structure.
-    // Removed fancy flex-grow logic that crashes mobile.
-    <div className="bg-white rounded-xl shadow-lg border border-stone-200 overflow-hidden relative" style={{ height: '600px', display: 'flex', flexDirection: 'column' }}>
+    // FULL HEIGHT CONTAINER - No scrolling lists, no crashes.
+    <div className="h-[600px] max-h-[80vh] bg-stone-900 rounded-xl overflow-hidden flex flex-col relative shadow-2xl border border-stone-700">
       
       {/* Header */}
-      <div className="bg-stone-900 text-amber-50 p-4 flex justify-between items-center shrink-0">
+      <div className="p-4 flex justify-between items-center text-amber-50/50">
         <div className="flex items-center gap-2">
-          <Wine className="w-5 h-5 text-amber-400" />
-          <h2 className="font-serif font-semibold">Live Sommelier</h2>
+          <Wine className="w-5 h-5 text-amber-500" />
+          <span className="text-xs uppercase tracking-widest font-semibold text-amber-500">Live Voice</span>
         </div>
-        <div className="flex gap-2">
-           {isLoading && <Sparkles className="w-4 h-4 animate-spin text-amber-400" />}
-        </div>
+        <button onClick={() => setAudioEnabled(!audioEnabled)}>
+          {audioEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5 text-red-400" />}
+        </button>
       </div>
 
-      {/* Messages Area - HARD CODED OVERFLOW */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-stone-50" style={{ flexGrow: 1 }}>
-        {messages.map((msg) => (
-          <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[85%] rounded-lg p-3 ${
-              msg.role === 'user' 
-                ? 'bg-stone-800 text-white' 
-                : 'bg-white border border-stone-200 text-stone-800 shadow-sm'
-            }`}>
-              {msg.imageUrl && (
-                <img src={msg.imageUrl} alt="Uploaded" className="max-w-full h-auto rounded-lg mb-2 border border-stone-600" />
-              )}
-              <div className="whitespace-pre-wrap text-sm leading-relaxed">
-                {msg.content.split(/(\[B\].*?\[\/B\])/g).map((part, i) => 
-                  part.startsWith('[B]') 
-                    ? <strong key={i} className="text-amber-700 font-bold">{part.replace(/\[\/?B\]/g, '')}</strong>
-                    : <span key={i}>{part}</span>
-                )}
-              </div>
-            </div>
-          </div>
-        ))}
-        {/* Invisible element to scroll to */}
-        <div ref={messagesEndRef} style={{ height: '1px' }} />
-      </div>
-
-      {/* Sources */}
-      {sources.length > 0 && (
-        <div className="px-4 py-2 bg-stone-100 text-xs border-t border-stone-200 flex gap-2 overflow-x-auto shrink-0">
-          <span className="font-semibold text-stone-500">Sources:</span>
-          {sources.map((src, i) => (
-            <a key={i} href={src.uri} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline truncate max-w-[150px]">
-              {src.title}
-            </a>
-          ))}
+      {/* Main Visualizer Area */}
+      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+        
+        {/* The "Orb" - Changes based on state */}
+        <div 
+          onClick={toggleListening}
+          className={`
+            w-32 h-32 rounded-full flex items-center justify-center cursor-pointer transition-all duration-500 mb-8
+            ${status === 'listening' ? 'bg-red-500 scale-110 shadow-[0_0_50px_rgba(239,68,68,0.5)]' : ''}
+            ${status === 'thinking' ? 'bg-amber-500 animate-pulse shadow-[0_0_50px_rgba(245,158,11,0.5)]' : ''}
+            ${status === 'speaking' ? 'bg-amber-400 scale-105 shadow-[0_0_30px_rgba(251,191,36,0.5)]' : ''}
+            ${status === 'idle' ? 'bg-stone-800 border-2 border-stone-600 hover:border-amber-500' : ''}
+          `}
+        >
+          {status === 'listening' && <Mic className="w-12 h-12 text-white animate-bounce" />}
+          {status === 'thinking' && <Wine className="w-12 h-12 text-white animate-spin" />}
+          {status === 'speaking' && <Volume2 className="w-12 h-12 text-stone-900" />}
+          {status === 'idle' && <Mic className="w-12 h-12 text-stone-400" />}
         </div>
-      )}
 
-      {/* Input Area */}
-      <div className="p-4 bg-white border-t border-stone-200 shrink-0">
-        <div className="flex gap-2">
-          <button 
-            onClick={() => fileInputRef.current?.click()}
-            className="p-2 text-stone-400 hover:text-stone-600 hover:bg-stone-100 rounded-full transition-colors"
-          >
-            <Camera className="w-5 h-5" />
-          </button>
-          <input 
-            type="file" 
-            ref={fileInputRef} 
-            className="hidden" 
-            accept="image/*" 
-            onChange={handleFileUpload}
-          />
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-            placeholder="Ask about wines..."
-            className="flex-1 bg-stone-100 border-none rounded-full px-4 py-2 text-sm focus:ring-2 focus:ring-amber-500 outline-none"
-            disabled={isLoading}
-          />
-          <button 
-            onClick={handleSend}
-            disabled={isLoading || !input.trim()}
-            className={`p-2 rounded-full transition-all ${
-              isLoading || !input.trim() 
-                ? 'bg-stone-200 text-stone-400' 
-                : 'bg-stone-900 text-amber-400 hover:bg-black'
-            }`}
-          >
-            <Send className="w-5 h-5" />
-          </button>
-        </div>
+        {/* Status Text */}
+        <h3 className="text-2xl font-serif text-amber-50 mb-2">
+          {status === 'listening' && "Listening..."}
+          {status === 'thinking' && "Consulting the Cellar..."}
+          {status === 'speaking' && "Vintellect Speaking"}
+          {status === 'idle' && "Tap to Speak"}
+        </h3>
+
+        {/* Transcript / Subtitles */}
+        <p className="text-stone-400 text-sm max-w-md leading-relaxed min-h-[60px]">
+          {transcript}
+        </p>
       </div>
     </div>
   );
