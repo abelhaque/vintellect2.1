@@ -13,7 +13,10 @@ const getAI = () => {
   return new GoogleGenerativeAI(API_KEY);
 };
 
-// Robust CSV Line Splitter
+// ... (Your existing splitCSV and getContextualWineData functions go here - keep them!) ...
+// I will omit them to keep this snippet copy-pasteable and clean.
+// Be sure to keep the CSV logic you had before!
+
 const splitCSV = (text: string) => {
   const result = [];
   let current = '';
@@ -30,7 +33,6 @@ const splitCSV = (text: string) => {
   return result;
 };
 
-// Optimized Local Lookup
 const getContextualWineData = (
   customKb: string | null, 
   activeRetailers: string[], 
@@ -118,17 +120,16 @@ export const generateWineResponseStream = async (
 ): Promise<{ sources: Source[] }> => {
   const genAI = getAI();
   
-  // 3. CORRECT UPGRADE: Gemini 2.0 Flash
-  // Using the latest model for speed and intelligence
+  // THE GENERATION LEAP: GEMINI 3.0
+  // Note: If 'gemini-3.0-flash-preview' fails, check AI Studio for the exact ID string.
   const model = genAI.getGenerativeModel({ 
-    model: "gemini-2.0-flash",
+    model: "gemini-3.0-flash-preview", 
     systemInstruction: getSystemInstruction(activeSupermarkets, activeWineTypes, activePriceTier, ""),
   });
 
   const lastUserMessage = [...history].reverse().find(m => m.role === 'user')?.content || "Hello";
 
-  // FILTER: Keep the chat clean (remove initial greeting)
-  // This prevents the "First message must be User" error
+  // FILTER: Keep the chat clean
   const validHistory = history.slice(0, -1)
     .filter((msg, index) => {
       if (index === 0 && msg.role === 'assistant') return false;
@@ -164,8 +165,7 @@ export const generateWineResponseStream = async (
 
 export const analyzeImage = async (prompt: string, base64Data: string, mimeType: string): Promise<string> => {
   const genAI = getAI();
-  // Upgrade Vision to 2.0 as well
-  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+  const model = genAI.getGenerativeModel({ model: "gemini-3.0-flash-preview" });
   const result = await model.generateContent([
     prompt,
     { inlineData: { data: base64Data, mimeType } }
