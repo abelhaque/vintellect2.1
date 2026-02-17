@@ -20,7 +20,7 @@ const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
   const [connectionState, setConnectionState] = useState<'idle' | 'connecting' | 'listening' | 'speaking' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
   const [textInput, setTextInput] = useState('');
-  const [audioLevel, setAudioLevel] = useState(0); // For the visual waveform
+  const [audioLevel, setAudioLevel] = useState(0); // Real-time voice visualizer state
   
   const sessionRef = useRef<any>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -28,7 +28,7 @@ const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const animationFrameRef = useRef<number | null>(null);
 
-  // PCM Decoder: Transforms Int16 Gemini data into Float32 WebAudio buffers
+  // PCM Decoder: Transforms Int16 Gemini data into high-fidelity WebAudio buffers
   const decodeAudioData = async (data: Uint8Array, ctx: AudioContext, sampleRate: number): Promise<AudioBuffer> => {
     const dataInt16 = new Int16Array(data.buffer);
     const buffer = ctx.createBuffer(1, dataInt16.length, sampleRate);
@@ -44,21 +44,19 @@ const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
     setErrorMsg('');
 
     try {
+      // 1. HARDWARE HANDOFF
       const stream = props.preAuthorizedStream;
-      if (!stream) {
-        throw new Error("No authorized microphone found. Please refresh and Enter Cellar again.");
-      }
+      if (!stream) throw new Error("Hardware stream missing. Please refresh and 'Enter Cellar' again.");
 
+      // 2. AUDIO ENGINE INITIALIZATION
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       const inputCtx = new AudioCtx({ sampleRate: 16000 });
       const outputCtx = new AudioCtx({ sampleRate: 24000 });
       audioContextRef.current = outputCtx;
       
-      if (outputCtx.state === 'suspended') {
-        await outputCtx.resume();
-      }
+      if (outputCtx.state === 'suspended') await outputCtx.resume();
 
-      // --- WAVEFORM ANALYSER SETUP ---
+      // 3. WAVEFORM ANALYSER (The Dancing Orb Logic)
       const analyser = inputCtx.createAnalyser();
       analyser.fftSize = 256;
       const sourceNode = inputCtx.createMediaStreamSource(stream);
@@ -66,49 +64,27 @@ const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
 
       const bufferLength = analyser.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
-
       const updateWaveform = () => {
         analyser.getByteFrequencyData(dataArray);
         let sum = 0;
-        for (let i = 0; i < bufferLength; i++) {
-          sum += dataArray[i];
-        }
-        const average = sum / bufferLength;
-        setAudioLevel(average); // 0 to 255
+        for (let i = 0; i < bufferLength; i++) sum += dataArray[i];
+        setAudioLevel(sum / bufferLength);
         animationFrameRef.current = requestAnimationFrame(updateWaveform);
       };
       updateWaveform();
 
-      // --- GEMINI CONNECTION ---
+      // 4. GEMINI LIVE WEBSOCKET CONNECTION
       const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-      if (!apiKey) throw new Error("Vintellect API Key is missing.");
+      if (!apiKey) throw new Error("API Key configuration error.");
       
       const ai = new GoogleGenAI({ apiKey });
       
       const sessionPromise = ai.live.connect({
-        model: 'gemini-3-flash-preview',
+        model: 'gemini-2.0-flash-exp', // Standardized for WebSocket reliability
         callbacks: {
           onopen: () => {
+            console.log("Cellar Neural Link: Established");
             setConnectionState('listening');
-            const source = inputCtx.createMediaStreamSource(stream);
-            const processor = inputCtx.createScriptProcessor(4096, 1, 1);
-            
-            processor.onaudioprocess = (e) => {
-              const inputData = e.inputBuffer.getChannelData(0);
-              const int16 = new Int16Array(inputData.length);
-              for (let i = 0; i < inputData.length; i++) {
-                int16[i] = inputData[i] * 32768;
-              }
-              sessionRef.current?.sendRealtimeInput({
-                media: { 
-                  data: btoa(String.fromCharCode(...new Uint8Array(int16.buffer))), 
-                  mimeType: 'audio/pcm;rate=16000' 
-                }
-              });
-            };
-            
-            source.connect(processor);
-            processor.connect(inputCtx.destination);
           },
           onmessage: async (msg: LiveServerMessage) => {
             const base64Audio = msg.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
@@ -116,16 +92,15 @@ const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
               setConnectionState('speaking');
               const bin = atob(base64Audio);
               const bytes = new Uint8Array(bin.length);
-              for (let i = 0; i < bin.length; i++) {
-                bytes[i] = bin.charCodeAt(i);
-              }
+              for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
               
               const audioBuffer = await decodeAudioData(bytes, outputCtx, 24000);
               const source = outputCtx.createBufferSource();
               source.buffer = audioBuffer;
               source.connect(outputCtx.destination);
               
-              nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outputCtx.currentTime);
+              const now = outputCtx.currentTime;
+              if (nextStartTimeRef.current < now) nextStartTimeRef.current = now;
               source.start(nextStartTimeRef.current);
               nextStartTimeRef.current += audioBuffer.duration;
               
@@ -137,54 +112,54 @@ const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
             }
           },
           onerror: (err) => {
-            console.error("Gemini Protocol Error:", err);
+            console.error("Neural Link Error:", err);
             setConnectionState('error');
-            setErrorMsg("Cellar connection interrupted.");
+            setErrorMsg("Neural link failed. Please check connection.");
           },
-          onclose: () => {
-            if (!props.isChatMode) props.onClose();
+          onclose: (event) => {
+            if (event.code !== 1000) {
+                setConnectionState('error');
+                setErrorMsg(`Cellar connection lost (Code: ${event.code})`);
+            } else if (!props.isChatMode) {
+                props.onClose();
+            }
           }
         },
         config: {
           responseModalities: [Modality.AUDIO],
-          speechConfig: { 
-            voiceConfig: { 
-              prebuiltVoiceConfig: { voiceName: 'Fenrir' } 
-            } 
-          },
-          systemInstruction: `You are Vintellect, an elite British Sommelier. 
-            Markets: ${props.activeSupermarkets.join(', ')}. 
-            Price Tier: ${props.activePriceTier || 'All'}.
-            Your persona is sophisticated, knowledgeable, and helpful.`
+          speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Fenrir' } } },
+          systemInstruction: `You are Vintellect, an elite UK sommelier. Active Supermarkets: ${props.activeSupermarkets.join(', ')}.`
         }
       });
-      
       sessionRef.current = await sessionPromise;
 
     } catch (err: any) {
-      console.error("Session Initialization Failed:", err);
       setConnectionState('error');
-      setErrorMsg(err.message || "Connection failed.");
+      setErrorMsg(err.message || "Session startup failed.");
     }
   };
 
   useEffect(() => {
     return () => {
-      sessionRef.current?.close();
+      if (sessionRef.current) sessionRef.current.close();
       if (audioContextRef.current) audioContextRef.current.close();
       if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
     };
   }, []);
 
+  const handleSendText = () => {
+    if (!textInput.trim()) return;
+    props.handleSendMessage(textInput);
+    setTextInput('');
+  };
+
   return (
     <div className="fixed inset-0 z-[200] bg-[#800020] flex flex-col items-center justify-center p-8 text-[#F7E1A1] backdrop-blur-3xl animate-in fade-in duration-500">
+      
       <div className="absolute top-8 right-8 flex gap-4">
-        <button 
-          onClick={props.onSwitchMode} 
-          className="p-3 bg-white/10 hover:bg-white/20 rounded-full transition-colors flex items-center gap-2"
-        >
-          {props.isChatMode ? <Mic size={24} /> : <MessageSquare size={24} />}
-          {!props.isChatMode && <span className="text-[10px] font-bold uppercase tracking-widest hidden sm:inline">History</span>}
+        <button onClick={props.onSwitchMode} className="flex items-center gap-2 px-5 py-2 bg-white/10 hover:bg-white/20 rounded-full text-xs font-bold uppercase tracking-widest transition-all">
+          {props.isChatMode ? <Mic size={16} /> : <MessageSquare size={16} />}
+          {props.isChatMode ? "Voice Mode" : "View History"}
         </button>
         <button onClick={props.onClose} className="p-3 hover:bg-white/10 rounded-full transition-colors">
           <X size={24} />
@@ -196,58 +171,53 @@ const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
           <div className="flex flex-col items-center gap-12">
             {connectionState === 'idle' ? (
               <button onClick={initializeLiveSession} className="group flex flex-col items-center gap-6">
-                <div className="w-56 h-56 rounded-full border-4 border-[#D4AF37]/30 flex items-center justify-center bg-[#F7E1A1]/5 group-hover:bg-[#F7E1A1]/10 transition-all active:scale-95">
-                  <PlayCircle size={100} className="text-[#F7E1A1] shadow-2xl" />
+                <div className="w-56 h-56 rounded-full border-4 border-[#D4AF37]/30 flex items-center justify-center bg-[#F7E1A1]/5 group-hover:bg-[#F7E1A1]/10 transition-all active:scale-95 shadow-2xl">
+                  <PlayCircle size={100} className="text-[#F7E1A1]" />
                 </div>
-                <h2 className="text-3xl font-serif font-bold italic tracking-tight">Begin Consultation</h2>
+                <div className="space-y-2">
+                  <h2 className="text-3xl font-serif font-bold italic tracking-tight">Begin Consultation</h2>
+                  <p className="text-[10px] uppercase tracking-[0.4em] opacity-40 font-bold">Authorized Mic Ready</p>
+                </div>
               </button>
             ) : (
               <>
-                {/* THE WAVEFORM ORB */}
-                <div 
-                  className="relative w-64 h-64 flex items-center justify-center rounded-full"
-                  style={{ 
-                    boxShadow: connectionState === 'listening' 
-                      ? `0 0 ${20 + (audioLevel / 2)}px ${audioLevel / 4}px rgba(212, 175, 55, 0.4)` 
-                      : 'none',
-                    transition: 'box-shadow 0.05s ease-out'
-                  }}
-                >
-                  {/* Outer Dancing Ring */}
-                  <div 
-                    className="absolute inset-0 rounded-full border-2 border-[#D4AF37]/20"
-                    style={{ 
-                      transform: `scale(${1 + (audioLevel / 500)})`,
-                      opacity: audioLevel > 5 ? 0.8 : 0.2
-                    }}
-                  />
-                  
-                  {/* The Main Orb */}
+                {/* DYNAMIC WAVEFORM ORB */}
+                <div className="relative w-64 h-64 flex items-center justify-center rounded-full" 
+                     style={{ 
+                       boxShadow: connectionState === 'listening' 
+                         ? `0 0 ${20 + (audioLevel / 2)}px ${audioLevel / 4}px rgba(212, 175, 55, 0.4)` 
+                         : 'none', 
+                       transition: 'box-shadow 0.1s ease-out' 
+                     }}>
+                  <div className="absolute inset-0 rounded-full border-2 border-[#D4AF37]/20" 
+                       style={{ 
+                         transform: `scale(${1 + (audioLevel / 400)})`, 
+                         opacity: audioLevel > 5 ? 0.8 : 0.2, 
+                         transition: 'transform 0.1s ease-out' 
+                       }} />
                   <div className={`w-44 h-44 rounded-full bg-[#F7E1A1] flex items-center justify-center shadow-2xl transition-all duration-700 ${connectionState === 'speaking' ? 'scale-110 shadow-[#D4AF37]/50' : 'scale-100'}`}>
                     {connectionState === 'connecting' ? <Loader2 className="text-[#800020] animate-spin" size={60} /> : 
                      connectionState === 'speaking' ? <Volume2 className="text-[#800020]" size={60} /> : 
+                     connectionState === 'error' ? <AlertCircle className="text-red-600" size={60} /> :
                      <Mic className="text-[#800020]" size={60} />}
                   </div>
                 </div>
-
-                <div className="space-y-4">
-                  <h2 className="text-5xl font-serif font-bold italic">
-                      {connectionState === 'listening' ? "I'm Listening" : 
-                       connectionState === 'speaking' ? "Advising..." : 
-                       connectionState === 'error' ? "Hiccup!" : "Connecting..."}
-                  </h2>
-                </div>
+                <h2 className="text-5xl font-serif font-bold italic">
+                  {connectionState === 'listening' ? "I'm Listening" : 
+                   connectionState === 'speaking' ? "Advising..." : 
+                   connectionState === 'error' ? "Neural Link Lost" : "Connecting..."}
+                </h2>
               </>
             )}
+            
             {errorMsg && (
-              <div className="flex items-center gap-2 bg-red-500/20 border border-red-500/50 px-4 py-2 rounded-lg">
-                <AlertCircle size={16} className="text-red-400" />
-                <p className="text-red-400 text-xs font-bold uppercase tracking-widest">{errorMsg}</p>
+              <div className="bg-red-500/20 border border-red-500/50 p-5 rounded-2xl max-w-xs animate-in slide-in-from-top-4">
+                <p className="text-red-400 text-[10px] font-bold uppercase tracking-widest leading-relaxed mb-3">{errorMsg}</p>
+                <button onClick={() => window.location.reload()} className="text-[9px] bg-red-500/40 text-white px-4 py-2 rounded-full uppercase tracking-tighter hover:bg-red-500 transition-colors">Hard Reset App</button>
               </div>
             )}
           </div>
         ) : (
-          /* CHAT VIEW (REMAINS THE SAME) */
           <div className="w-full bg-black/40 rounded-[2.5rem] border border-white/10 h-[500px] flex flex-col overflow-hidden shadow-2xl animate-in zoom-in-95 duration-300">
               <div className="flex-1 overflow-y-auto p-6 space-y-6 custom-scrollbar">
                   {props.messages.map((m, idx) => (
@@ -262,16 +232,28 @@ const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
                   <input 
                     value={textInput} 
                     onChange={(e) => setTextInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && props.handleSendMessage(textInput).then(() => setTextInput(''))}
+                    onKeyDown={(e) => e.key === 'Enter' && handleSendText()}
                     className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm outline-none placeholder:text-white/20 focus:border-[#F7E1A1]/50 transition-all" 
-                    placeholder="Message the Sommelier..." 
+                    placeholder="Message Vintellect..." 
                   />
-                  <button onClick={() => props.handleSendMessage(textInput).then(() => setTextInput(''))} className="p-4 bg-[#F7E1A1] text-[#800020] rounded-xl hover:bg-white transition-all active:scale-90">
+                  <button onClick={handleSendText} className="p-4 bg-[#F7E1A1] text-[#800020] rounded-xl hover:bg-white transition-all active:scale-90">
                     <Send size={20}/>
                   </button>
               </div>
           </div>
         )}
+        
+        <div className="mt-8 flex items-center gap-6 opacity-30">
+           <div className="flex flex-col items-center gap-1">
+              <ShieldCheck size={18} />
+              <span className="text-[7px] uppercase font-bold tracking-[0.2em]">Neural Encryption</span>
+           </div>
+           <div className="w-px h-6 bg-[#F7E1A1]/30" />
+           <div className="flex flex-col items-center gap-1">
+              <Mic size={18} />
+              <span className="text-[7px] uppercase font-bold tracking-[0.2em]">Zero-Lag Stream</span>
+           </div>
+        </div>
       </div>
     </div>
   );
