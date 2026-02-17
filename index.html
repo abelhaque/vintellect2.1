@@ -5,12 +5,11 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0">
     <title>Vintellect - Your Supermarket Sommelier</title>
     
+    <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&family=Playfair+Display:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
     
     <style>
         :root { --burgundy: #800020; --cream: #F7E1A1; --parchment: #FDF5E6; --gold: #D4AF37; }
-        
-        /* Safari iOS overscroll and keyboard fixes */
         html, body { 
             font-family: 'Montserrat', sans-serif; 
             background-color: var(--cream); 
@@ -19,32 +18,9 @@
             height: 100%;
             width: 100%;
             position: fixed; 
-            touch-action: manipulation;
         }
-
         h1, h2, h3 { font-family: 'Playfair Display', serif; }
-        .paper-texture { background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.005' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.04'/%3E%3C/svg%3E%3C/g%3E"); }
-        
-        .momentum-scroll::-webkit-scrollbar { display: none; }
-        .momentum-scroll { 
-            -ms-overflow-style: none; 
-            scrollbar-width: none; 
-            -webkit-overflow-scrolling: touch; 
-        }
-
-        .wine-liquid { animation: liquidFill 3s ease-in-out infinite; }
-        @keyframes liquidFill { 0% { transform: translateY(100%); } 50% { transform: translateY(20%); } 100% { transform: translateY(100%); } }
-
-        .prose-wine h1 { font-size: 1.5rem; font-weight: 700; margin-bottom: 0.5rem; color: var(--burgundy); }
-        .prose-wine h2 { font-size: 1.25rem; font-weight: 700; margin-bottom: 0.5rem; color: var(--burgundy); }
-        .prose-wine p { margin-bottom: 0.75rem; }
-        .prose-wine strong { font-weight: 700; color: #000; }
-        .prose-wine table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.85rem; }
-        .prose-wine th, .prose-wine td { border: 1px solid rgba(128, 0, 32, 0.1); padding: 0.5rem; text-align: left; }
-        
         .glass { background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.3); }
-        
-        input, select, textarea { font-size: 16px !important; }
     </style>
 </head>
 <body>
