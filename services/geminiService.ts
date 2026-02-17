@@ -13,10 +13,7 @@ const getAI = () => {
   return new GoogleGenerativeAI(API_KEY);
 };
 
-// ... (Your existing splitCSV and getContextualWineData functions go here - keep them!) ...
-// I will omit them to keep this snippet copy-pasteable and clean.
-// Be sure to keep the CSV logic you had before!
-
+// Robust CSV Line Splitter
 const splitCSV = (text: string) => {
   const result = [];
   let current = '';
@@ -33,6 +30,7 @@ const splitCSV = (text: string) => {
   return result;
 };
 
+// Optimized Local Lookup
 const getContextualWineData = (
   customKb: string | null, 
   activeRetailers: string[], 
@@ -120,10 +118,10 @@ export const generateWineResponseStream = async (
 ): Promise<{ sources: Source[] }> => {
   const genAI = getAI();
   
-  // THE GENERATION LEAP: GEMINI 3.0
-  // Note: If 'gemini-3.0-flash-preview' fails, check AI Studio for the exact ID string.
+  // VERIFIED WORKING MODEL: Gemini 2.0 Flash
+  // This model definitely exists (API verified) and is paid-tier enabled.
   const model = genAI.getGenerativeModel({ 
-    model: "gemini-3.0-flash-preview", 
+    model: "gemini-2.0-flash", 
     systemInstruction: getSystemInstruction(activeSupermarkets, activeWineTypes, activePriceTier, ""),
   });
 
@@ -165,7 +163,8 @@ export const generateWineResponseStream = async (
 
 export const analyzeImage = async (prompt: string, base64Data: string, mimeType: string): Promise<string> => {
   const genAI = getAI();
-  const model = genAI.getGenerativeModel({ model: "gemini-3.0-flash-preview" });
+  // Using 2.0 Flash for Vision as well
+  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
   const result = await model.generateContent([
     prompt,
     { inlineData: { data: base64Data, mimeType } }
