@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
-import { X, Mic, Volume2, ShieldCheck, Loader2, MessageSquare, Send, PlayCircle } from 'lucide-react';
+import { X, Mic, Volume2, ShieldCheck, Loader2, MessageSquare, Send, PlayCircle, AlertCircle } from 'lucide-react';
 import { Message } from '../types';
 
 interface LiveSommelierProps {
+  preAuthorizedStream: MediaStream | null; // CATCH THE HANDOFF
   isChatMode: boolean;
   onClose: () => void;
   onSwitchMode: () => void;
@@ -11,40 +12,48 @@ interface LiveSommelierProps {
   activeWineTypes: string[];
   activePriceTier: string | null;
   messages: Message[];
-  handleSendMessage: (content: string) => Promise<void>;
+  handleSendMessage: (content: string, imageUrl?: string, displayContent?: string) => Promise<void>;
   isTyping: boolean;
 }
 
 const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
-  // We start in 'idle' so we don't trigger the mic popup automatically
   const [connectionState, setConnectionState] = useState<'idle' | 'connecting' | 'listening' | 'speaking' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
   const [textInput, setTextInput] = useState('');
   
   const sessionRef = useRef<any>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
   const nextStartTimeRef = useRef(0);
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
 
-  // 1. Unified Setup Function (The Studio Way)
+  // Helper: PCM Decoder for Gemini's Int16 audio data
+  const decodeAudioData = async (data: Uint8Array, ctx: AudioContext, sampleRate: number): Promise<AudioBuffer> => {
+    const dataInt16 = new Int16Array(data.buffer);
+    const buffer = ctx.createBuffer(1, dataInt16.length, sampleRate);
+    const channelData = buffer.getChannelData(0);
+    for (let i = 0; i < dataInt16.length; i++) {
+      channelData[i] = dataInt16[i] / 32768.0;
+    }
+    return buffer;
+  };
+
   const initializeLiveSession = async () => {
     setConnectionState('connecting');
     setErrorMsg('');
 
     try {
-      // Step A: Explicitly request Mic (Browser focus stays here)
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
+      // Step A: Use the stream from the Splash Screen
+      const stream = props.preAuthorizedStream;
+      if (!stream) throw new Error("No authorized microphone found.");
 
-      // Step B: Initialize Audio Contexts
+      // Step B: Initialize Audio (Standardized for 2026 browsers)
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       const inputCtx = new AudioCtx({ sampleRate: 16000 });
       const outputCtx = new AudioCtx({ sampleRate: 24000 });
       audioContextRef.current = outputCtx;
       if (outputCtx.state === 'suspended') await outputCtx.resume();
 
-      // Step C: Connect to Gemini 3 ONLY after Mic is ready
+      // Step C: Connect to Gemini
       const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
       const ai = new GoogleGenAI({ apiKey });
       
@@ -77,7 +86,7 @@ const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
               const bytes = new Uint8Array(bin.length);
               for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
               
-              const audioBuffer = await outputCtx.decodeAudioData(bytes.buffer);
+              const audioBuffer = await decodeAudioData(bytes, outputCtx, 24000);
               const source = outputCtx.createBufferSource();
               source.buffer = audioBuffer;
               source.connect(outputCtx.destination);
@@ -93,31 +102,31 @@ const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
               };
             }
           },
-          onerror: () => setConnectionState('error'),
+          onerror: (err) => {
+            console.error("Gemini Error:", err);
+            setConnectionState('error');
+          },
           onclose: () => {
-              // Only close if we didn't switch to chat mode
-              if (!props.isChatMode) props.onClose();
+            if (!props.isChatMode) props.onClose();
           }
         },
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Fenrir' } } },
-          systemInstruction: `You are Vintellect. Supermarkets: ${props.activeSupermarkets.join(', ')}.`
+          systemInstruction: `You are Vintellect. Supermarkets: ${props.activeSupermarkets.join(', ')}. British Sommelier tone.`
         }
       });
       sessionRef.current = await sessionPromise;
 
     } catch (err: any) {
       setConnectionState('error');
-      setErrorMsg("Mic permission required to speak.");
+      setErrorMsg(err.message || "Connection failed.");
     }
   };
 
-  // 2. Cleanup
   useEffect(() => {
     return () => {
       sessionRef.current?.close();
-      streamRef.current?.getTracks().forEach(t => t.stop());
       audioContextRef.current?.close();
     };
   }, []);
@@ -135,21 +144,16 @@ const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
         {!props.isChatMode ? (
           <div className="flex flex-col items-center gap-12">
             {connectionState === 'idle' ? (
-              // STEP 1: INITIAL BUTTON (Fixes the mobile popup crash)
-              <button 
-                onClick={initializeLiveSession}
-                className="group flex flex-col items-center gap-6"
-              >
+              <button onClick={initializeLiveSession} className="group flex flex-col items-center gap-6">
                 <div className="w-48 h-48 rounded-full border-4 border-[#D4AF37]/40 flex items-center justify-center bg-[#F7E1A1]/5 group-active:scale-95 transition-transform">
                   <PlayCircle size={80} className="text-[#F7E1A1]" />
                 </div>
                 <div className="space-y-2">
                   <h2 className="text-3xl font-serif font-bold italic tracking-tight">Begin Consultation</h2>
-                  <p className="text-[10px] uppercase tracking-[0.3em] opacity-50">Tap to activate microphone</p>
+                  <p className="text-[10px] uppercase tracking-[0.3em] opacity-50">Authorized Mic Ready</p>
                 </div>
               </button>
             ) : (
-              // STEP 2: ACTIVE ORB
               <>
                 <div className={`w-48 h-48 rounded-full border-4 border-[#D4AF37]/40 flex items-center justify-center ${connectionState === 'listening' ? 'animate-pulse' : ''}`}>
                   <div className={`w-36 h-36 rounded-full bg-[#F7E1A1] flex items-center justify-center shadow-2xl transition-transform ${connectionState === 'speaking' ? 'scale-110' : 'scale-100'}`}>
@@ -166,7 +170,7 @@ const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
             {errorMsg && <p className="text-red-400 text-xs font-bold uppercase">{errorMsg}</p>}
           </div>
         ) : (
-          /* CHAT VIEW */
+          /* CHAT VIEW (Syncs with history) */
           <div className="w-full bg-black/20 rounded-3xl border border-white/10 h-[450px] flex flex-col">
               <div className="flex-1 overflow-y-auto p-4 space-y-4">
                   {props.messages.map(m => (
