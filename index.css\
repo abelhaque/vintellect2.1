@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --burgundy: #800020;
+  --cream: #F7E1A1;
+  --gold: #D4AF37;
+  --parchment: #FDF5E6;
+}
+
+/* Base Styles */
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--cream);
+  color: #1a1a1a;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom Scrollbar for the Cellar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(128, 0, 32, 0.05);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--burgundy);
+  border-radius: 10px;
+}
