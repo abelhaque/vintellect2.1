@@ -1,188 +1,185 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Mic, MicOff, X, Wine, Volume2, VolumeX } from 'lucide-react';
-import { generateWineResponseStream } from '../services/geminiService';
-import { Message } from '../types';
+import React, { useEffect, useRef, useState } from 'react';
+import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
+import { X, Mic, Volume2, ShieldCheck, Loader2 } from 'lucide-react';
 
 interface LiveSommelierProps {
-  activeSupermarkets: string[];
-  activeWineTypes: string[];
-  activePriceTier: string | null;
+  // Keeping these for compatibility, but we rely on the direct API connection now
+  activeSupermarkets?: string[];
+  activeWineTypes?: string[];
+  activePriceTier?: string | null;
 }
 
-const LiveSommelier: React.FC<LiveSommelierProps> = ({
-  activeSupermarkets = [],
-  activeWineTypes = [],
-  activePriceTier = null
-}) => {
-  // Simple State
-  const [status, setStatus] = useState<'idle' | 'listening' | 'thinking' | 'speaking'>('idle');
-  const [transcript, setTranscript] = useState("Tap the microphone to speak to Vintellect.");
-  const [audioEnabled, setAudioEnabled] = useState(true);
+const LiveSommelier: React.FC<LiveSommelierProps> = () => {
+  const [connectionState, setConnectionState] = useState<'connecting' | 'listening' | 'speaking' | 'error'>('connecting');
+  const [errorMsg, setErrorMsg] = useState('');
   
-  // History is kept in memory for context, but NOT rendered (prevents crash)
-  const historyRef = useRef<Message[]>([
-    { role: 'assistant', content: "Hello. I am listening.", id: 'init', timestamp: new Date() }
-  ]);
+  const sessionPromiseRef = useRef<any>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const nextStartTimeRef = useRef(0);
+  const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
 
-  // Speech Recognition Setup (Web Standard)
-  const recognitionRef = useRef<any>(null);
+  // 1. Audio Helpers
+  const encode = (bytes: Uint8Array) => {
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
+    return btoa(binary);
+  };
 
-  useEffect(() => {
-    // @ts-ignore - Handle browser prefixes
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    
-    if (SpeechRecognition) {
-      const recognition = new SpeechRecognition();
-      recognition.continuous = false;
-      recognition.interimResults = false;
-      recognition.lang = 'en-GB'; // British English for the Sommelier vibe
+  const decode = (base64: string) => {
+    const binaryString = atob(base64);
+    const bytes = new Uint8Array(binaryString.length);
+    for (let i = 0; i < binaryString.length; i++) bytes[i] = binaryString.charCodeAt(i);
+    return bytes;
+  };
 
-      recognition.onstart = () => setStatus('listening');
-      
-      recognition.onresult = (event: any) => {
-        const text = event.results[0][0].transcript;
-        handleUserVoiceInput(text);
-      };
-
-      recognition.onerror = (event: any) => {
-        console.error("Speech Error:", event.error);
-        setStatus('idle');
-        setTranscript("I didn't quite catch that. Tap to try again.");
-      };
-
-      recognition.onend = () => {
-        if (status === 'listening') setStatus('idle');
-      };
-
-      recognitionRef.current = recognition;
-    } else {
-      setTranscript("Voice not supported on this browser.");
+  async function decodeAudioData(data: Uint8Array, ctx: AudioContext, sampleRate: number): Promise<AudioBuffer> {
+    const dataInt16 = new Int16Array(data.buffer);
+    const buffer = ctx.createBuffer(1, dataInt16.length, sampleRate);
+    const channelData = buffer.getChannelData(0);
+    for (let i = 0; i < dataInt16.length; i++) {
+      channelData[i] = dataInt16[i] / 32768.0;
     }
+    return buffer;
+  }
+
+  // 2. The Gemini 2.5 Live Connection
+  useEffect(() => {
+    const startSession = async () => {
+      try {
+        const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
+        if (!apiKey) throw new Error("API Key missing");
+
+        const ai = new GoogleGenAI({ apiKey });
+        
+        // Setup Audio Contexts
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        const inputCtx = new AudioContextClass({ sampleRate: 16000 });
+        const outputCtx = new AudioContextClass({ sampleRate: 24000 });
+        audioContextRef.current = outputCtx;
+
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        
+        // --- THE MAGIC: Connecting to Gemini 2.5 Live ---
+        const sessionPromise = ai.live.connect({
+          model: 'gemini-2.5-flash-native-audio-preview-12-2025',
+          callbacks: {
+            onopen: () => {
+              setConnectionState('listening');
+              
+              // Setup Mic Stream
+              const source = inputCtx.createMediaStreamSource(stream);
+              const processor = inputCtx.createScriptProcessor(4096, 1, 1);
+              
+              processor.onaudioprocess = (e) => {
+                const inputData = e.inputBuffer.getChannelData(0);
+                const int16 = new Int16Array(inputData.length);
+                for (let i = 0; i < inputData.length; i++) int16[i] = inputData[i] * 32768;
+                
+                // Send Audio to Gemini
+                sessionPromise.then(s => s.sendRealtimeInput({
+                  media: { data: encode(new Uint8Array(int16.buffer)), mimeType: 'audio/pcm;rate=16000' }
+                }));
+              };
+              
+              source.connect(processor);
+              processor.connect(inputCtx.destination);
+            },
+            onmessage: async (msg: LiveServerMessage) => {
+              // Receive Audio from Gemini
+              const base64Audio = msg.serverContent?.modelTurn?.parts[0]?.inlineData?.data;
+              if (base64Audio) {
+                setConnectionState('speaking');
+                const audioBuffer = await decodeAudioData(decode(base64Audio), outputCtx, 24000);
+                
+                const source = outputCtx.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(outputCtx.destination);
+                
+                nextStartTimeRef.current = Math.max(nextStartTimeRef.current, outputCtx.currentTime);
+                source.start(nextStartTimeRef.current);
+                nextStartTimeRef.current += audioBuffer.duration;
+                
+                sourcesRef.current.add(source);
+                source.onended = () => {
+                  sourcesRef.current.delete(source);
+                  if (sourcesRef.current.size === 0) setConnectionState('listening');
+                };
+              }
+
+              // Handle Interruptions (User spoke while AI was speaking)
+              if (msg.serverContent?.interrupted) {
+                sourcesRef.current.forEach(s => s.stop());
+                sourcesRef.current.clear();
+                nextStartTimeRef.current = 0;
+                setConnectionState('listening');
+              }
+            },
+            onerror: (e) => {
+              console.error("Live API Error:", e);
+              setConnectionState('error');
+              setErrorMsg('Connection disrupted.');
+            },
+            onclose: () => {
+               setConnectionState('connecting'); 
+            }
+          },
+          config: {
+            responseModalities: [Modality.AUDIO],
+            speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Fenrir' } } },
+            systemInstruction: "You are Vintellect, a British Sommelier. You are in a live voice conversation. Be concise, witty, and extremely knowledgeable about UK supermarket wine. Speak in a refined British accent."
+          }
+        });
+        
+        sessionPromiseRef.current = await sessionPromise;
+
+      } catch (err: any) {
+        console.error("Live Init Error:", err);
+        setConnectionState('error');
+        setErrorMsg('Microphone access denied or API Error.');
+      }
+    };
+
+    startSession();
+
+    return () => {
+      // Cleanup on close
+      sessionPromiseRef.current?.then((s: any) => s.close());
+      audioContextRef.current?.close();
+    };
   }, []);
 
-  const speak = (text: string) => {
-    if (!audioEnabled || !window.speechSynthesis) return;
-    
-    // Stop any current speech
-    window.speechSynthesis.cancel();
-
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'en-GB'; // British Voice
-    utterance.rate = 1.0;
-    utterance.pitch = 1.0;
-    
-    utterance.onstart = () => setStatus('speaking');
-    utterance.onend = () => setStatus('idle');
-
-    window.speechSynthesis.speak(utterance);
-  };
-
-  const handleUserVoiceInput = async (text: string) => {
-    setTranscript(`"${text}"`);
-    setStatus('thinking');
-
-    // Add to history
-    const userMsg: Message = { 
-      id: Date.now().toString(), 
-      role: 'user', 
-      content: text, 
-      timestamp: new Date() 
-    };
-    historyRef.current.push(userMsg);
-
-    try {
-      let fullResponse = "";
-      
-      // Call Gemini Brain (The Text-to-Text part)
-      await generateWineResponseStream(
-        historyRef.current,
-        activeSupermarkets,
-        activeWineTypes,
-        activePriceTier,
-        (chunk) => {
-          // We just collect the text here, we don't render it live to avoid complexity
-          fullResponse = chunk;
-        }
-      );
-
-      // Add response to history
-      historyRef.current.push({
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: fullResponse,
-        timestamp: new Date()
-      });
-
-      // Speak the result
-      // Clean up bold tags for speech
-      const cleanText = fullResponse.replace(/\[\/?B\]/g, ''); 
-      setTranscript(cleanText); // Show subtitle
-      speak(cleanText); // Speak audio
-
-    } catch (error) {
-      setTranscript("I lost connection to the cellar. Please try again.");
-      setStatus('idle');
-    }
-  };
-
-  const toggleListening = () => {
-    if (status === 'listening') {
-      recognitionRef.current?.stop();
-    } else if (status === 'speaking') {
-      window.speechSynthesis.cancel();
-      setStatus('idle');
-    } else {
-      recognitionRef.current?.start();
-    }
-  };
-
   return (
-    // FULL HEIGHT CONTAINER - No scrolling lists, no crashes.
-    <div className="h-[600px] max-h-[80vh] bg-stone-900 rounded-xl overflow-hidden flex flex-col relative shadow-2xl border border-stone-700">
+    <div className="fixed inset-0 z-[200] bg-[#800020]/95 flex flex-col items-center justify-center p-8 text-[#F7E1A1] backdrop-blur-xl">
       
-      {/* Header */}
-      <div className="p-4 flex justify-between items-center text-amber-50/50">
-        <div className="flex items-center gap-2">
-          <Wine className="w-5 h-5 text-amber-500" />
-          <span className="text-xs uppercase tracking-widest font-semibold text-amber-500">Live Voice</span>
-        </div>
-        <button onClick={() => setAudioEnabled(!audioEnabled)}>
-          {audioEnabled ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5 text-red-400" />}
-        </button>
-      </div>
-
-      {/* Main Visualizer Area */}
-      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
-        
-        {/* The "Orb" - Changes based on state */}
-        <div 
-          onClick={toggleListening}
-          className={`
-            w-32 h-32 rounded-full flex items-center justify-center cursor-pointer transition-all duration-500 mb-8
-            ${status === 'listening' ? 'bg-red-500 scale-110 shadow-[0_0_50px_rgba(239,68,68,0.5)]' : ''}
-            ${status === 'thinking' ? 'bg-amber-500 animate-pulse shadow-[0_0_50px_rgba(245,158,11,0.5)]' : ''}
-            ${status === 'speaking' ? 'bg-amber-400 scale-105 shadow-[0_0_30px_rgba(251,191,36,0.5)]' : ''}
-            ${status === 'idle' ? 'bg-stone-800 border-2 border-stone-600 hover:border-amber-500' : ''}
-          `}
-        >
-          {status === 'listening' && <Mic className="w-12 h-12 text-white animate-bounce" />}
-          {status === 'thinking' && <Wine className="w-12 h-12 text-white animate-spin" />}
-          {status === 'speaking' && <Volume2 className="w-12 h-12 text-stone-900" />}
-          {status === 'idle' && <Mic className="w-12 h-12 text-stone-400" />}
+      {/* Visual Circle */}
+      <div className="flex flex-col items-center gap-12 max-w-md text-center">
+        <div className="relative">
+          <div className={`w-48 h-48 rounded-full border-4 border-[#D4AF37]/40 flex items-center justify-center ${connectionState === 'listening' ? 'animate-pulse' : ''}`}>
+            <div className={`w-36 h-36 rounded-full bg-[#F7E1A1] flex items-center justify-center shadow-2xl transition-all duration-500 ${connectionState === 'speaking' ? 'scale-110' : 'scale-100'}`}>
+              {connectionState === 'connecting' ? <Loader2 size={48} className="text-[#800020] animate-spin" /> : 
+               connectionState === 'speaking' ? <Volume2 size={48} className="text-[#800020]" /> : 
+               <Mic size={48} className="text-[#800020]" />}
+            </div>
+          </div>
+          <div className="absolute inset-0 rounded-full border border-[#F7E1A1]/10 scale-150 animate-ping opacity-20"></div>
         </div>
 
-        {/* Status Text */}
-        <h3 className="text-2xl font-serif text-amber-50 mb-2">
-          {status === 'listening' && "Listening..."}
-          {status === 'thinking' && "Consulting the Cellar..."}
-          {status === 'speaking' && "Vintellect Speaking"}
-          {status === 'idle' && "Tap to Speak"}
-        </h3>
+        <div className="space-y-4">
+          <h2 className="text-4xl font-bold tracking-tight font-serif text-[#F7E1A1]">
+            {connectionState === 'connecting' && "Summoning Sommelier..."}
+            {connectionState === 'listening' && "Listening..."}
+            {connectionState === 'speaking' && "Advising..."}
+            {connectionState === 'error' && "Connection Error"}
+          </h2>
+          <p className="text-sm font-medium uppercase tracking-[0.2em] opacity-60 text-[#F7E1A1]">
+            {errorMsg || "Gemini 2.5 Native Audio Active"}
+          </p>
+        </div>
 
-        {/* Transcript / Subtitles */}
-        <p className="text-stone-400 text-sm max-w-md leading-relaxed min-h-[60px]">
-          {transcript}
-        </p>
+        <div className="bg-black/20 rounded-2xl p-6 border border-white/5 w-full flex items-center gap-4">
+           <ShieldCheck className="text-[#D4AF37]" />
+           <p className="text-[10px] uppercase font-bold tracking-widest text-left text-[#F7E1A1]">Elite Cellar Knowledge Integrated</p>
+        </div>
       </div>
     </div>
   );
