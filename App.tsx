@@ -5,7 +5,7 @@ import LiveSommelier from './components/LiveSommelier';
 import { Message, Wine } from './types';
 import { WINE_DATABASE } from './constants';
 import { generateWineResponseStream } from './services/geminiService';
-import { Menu, Wine as WineIcon, ChevronRight, Mic, Sparkles, Trash2 } from 'lucide-react';
+import { Menu, Wine as WineIcon, ChevronRight, Mic, Sparkles, Trash2, Camera } from 'lucide-react';
 
 const WELCOME_MESSAGE: Message = {
   id: '1',
@@ -18,8 +18,7 @@ const App: React.FC = () => {
   const [showApp, setShowApp] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   
-  // --- CHANGE 1: UPDATED STATE FOR LIVE MODES ---
-  // Replaces: const [isLiveMode, setIsLiveMode] = useState(false);
+  // LIVE MODE: 'off', 'voice' (Sommelier), or 'chat' (Text History)
   const [liveMode, setLiveMode] = useState<'off' | 'voice' | 'chat'>('off');
   
   const [isTyping, setIsTyping] = useState(false);
@@ -30,6 +29,9 @@ const App: React.FC = () => {
   const [latencyNotice, setLatencyNotice] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [viewportHeight, setViewportHeight] = useState<number>(window.innerHeight);
+  
+  // PERMISSION STATE: Tracks if we successfully unlocked hardware
+  const [permissionError, setPermissionError] = useState(false);
   
   const audioContextRef = useRef<AudioContext | null>(null);
   const cyclerRef = useRef<number | null>(null);
@@ -244,12 +246,32 @@ const App: React.FC = () => {
     noiseSource.stop(now + 0.25);
   };
 
-  const handleEnterCellar = () => {
-    getAudioContext().then(() => {
-      playUpscaleJingle();
-      triggerHaptic(20);
+  // --- THE GLOBAL HARDWARE UNLOCK ---
+  const handleEnterCellar = async () => {
+    try {
+      // 1. Trigger the Permission Popup Immediately
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: true, 
+        video: true // Asking for video too matches AI Studio and is more likely to 'stick'
+      });
+      
+      // 2. Stop tracks to save battery, but keep permission 'granted'
+      stream.getTracks().forEach(track => track.stop());
+
+      // 3. Warm up the AudioContext (Critical for iOS)
+      const ctx = await getAudioContext();
+      if (ctx) {
+        playUpscaleJingle();
+        triggerHaptic(20);
+      }
+
       setShowApp(true);
-    });
+    } catch (err) {
+      console.error("Hardware permission denied:", err);
+      setPermissionError(true);
+      // We allow entry, but features will be degraded
+      setShowApp(true); 
+    }
   };
 
   useEffect(() => {
@@ -450,8 +472,7 @@ const App: React.FC = () => {
       className="w-full overflow-hidden bg-[#F7E1A1] relative"
       style={{ height: `${viewportHeight}px` }}
     >
-      {/* --- CHANGE 2: UPDATED LIVE SOMMELIER CALL --- */}
-      {/* This now connects the "Live Text" box to your chat history */}
+      {/* FINAL SYNC: Live Sommelier now shares brain and state with main app */}
       {liveMode !== 'off' && (
         <LiveSommelier 
           isChatMode={liveMode === 'chat'} 
@@ -460,6 +481,7 @@ const App: React.FC = () => {
           activeSupermarkets={activeSupermarkets}
           activeWineTypes={activeWineTypes}
           activePriceTier={activePriceTier}
+          // Bridging the brain
           messages={messages}
           handleSendMessage={handleSendMessage}
           isTyping={isTyping}
@@ -477,14 +499,22 @@ const App: React.FC = () => {
               <h1 className="text-5xl sm:text-7xl md:text-9xl font-bold text-[#F7E1A1] tracking-tighter font-serif break-words px-2">Vintellect</h1>
               <p className="text-2xl text-[#F7E1A1]/80 font-light mt-4 font-serif italic">Your elite supermarket sommelier.</p>
             </div>
-            <button 
-              onClick={handleEnterCellar}
-              className="group flex items-center gap-4 bg-[#F7E1A1] text-[#800020] px-12 py-6 rounded-full font-bold text-xl shadow-2xl hover:bg-white transition-all active:scale-95"
-            >
-              <Sparkles size={24} />
-              <span className="uppercase tracking-widest">Enter Cellar</span>
-              <ChevronRight />
-            </button>
+            <div className="flex flex-col gap-4">
+              <button 
+                onClick={handleEnterCellar}
+                className="group flex items-center gap-4 bg-[#F7E1A1] text-[#800020] px-12 py-6 rounded-full font-bold text-xl shadow-2xl hover:bg-white transition-all active:scale-95"
+              >
+                <Sparkles size={24} />
+                <span className="uppercase tracking-widest">Enter Cellar</span>
+                <ChevronRight />
+              </button>
+              
+              {permissionError && (
+                <p className="text-red-300 text-[10px] font-bold uppercase tracking-widest animate-pulse">
+                   Mic & Camera access required for the full experience.
+                </p>
+              )}
+            </div>
           </div>
         </div>
       ) : (
@@ -529,8 +559,8 @@ const App: React.FC = () => {
                   <button onClick={clearHistory} className="p-2 hover:bg-white/10 rounded-lg text-white/70" title="Clear Chat">
                     <Trash2 size={20} />
                   </button>
-                  {/* --- CHANGE 3: UPDATED HEADER BUTTON TO TRIGGER VOICE --- */}
                   <button 
+                    // UPDATED: Triggers Voice Mode by default
                     onClick={() => setLiveMode('voice')}
                     className="flex items-center gap-2 bg-[#F7E1A1] text-[#800020] hover:bg-white px-5 py-2 rounded-full transition-all text-sm font-bold shadow-lg"
                   >
