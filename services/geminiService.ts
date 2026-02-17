@@ -117,30 +117,30 @@ export const generateWineResponseStream = async (
   onChunk: (text: string) => void
 ): Promise<{ sources: Source[] }> => {
   const genAI = getAI();
+  
+  // 3. CORRECT UPGRADE: Gemini 2.0 Flash
+  // Using the latest model for speed and intelligence
   const model = genAI.getGenerativeModel({ 
-    model: "gemini-1.5-flash",
+    model: "gemini-2.0-flash",
     systemInstruction: getSystemInstruction(activeSupermarkets, activeWineTypes, activePriceTier, ""),
   });
 
-  // --- CRITICAL FIX START ---
-  // 1. Extract the current user message (the very last one)
   const lastUserMessage = [...history].reverse().find(m => m.role === 'user')?.content || "Hello";
 
-  // 2. Prepare Valid History (Exclude the new message AND the initial 'Hello' greeting)
-  // We filter out the first message if it is from the assistant (the greeting)
-  // We also slice(0, -1) to remove the current user message (because we send it separately in sendMessageStream)
-  const validHistory = history.slice(0, -1).filter((msg, index) => {
-    // If it's the very first message and it's from the assistant, DROP IT.
-    if (index === 0 && msg.role === 'assistant') return false;
-    return true;
-  }).map(msg => ({
-    role: msg.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: msg.content || "" }]
-  }));
-  // --- CRITICAL FIX END ---
+  // FILTER: Keep the chat clean (remove initial greeting)
+  // This prevents the "First message must be User" error
+  const validHistory = history.slice(0, -1)
+    .filter((msg, index) => {
+      if (index === 0 && msg.role === 'assistant') return false;
+      return true;
+    })
+    .map(msg => ({
+      role: msg.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: msg.content || "" }]
+    }));
 
   const chat = model.startChat({
-    history: validHistory, // Now perfectly clean (starts with User or is empty)
+    history: validHistory,
     generationConfig: {
       temperature: 0.1,
     }
@@ -164,7 +164,8 @@ export const generateWineResponseStream = async (
 
 export const analyzeImage = async (prompt: string, base64Data: string, mimeType: string): Promise<string> => {
   const genAI = getAI();
-  const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+  // Upgrade Vision to 2.0 as well
+  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
   const result = await model.generateContent([
     prompt,
     { inlineData: { data: base64Data, mimeType } }
