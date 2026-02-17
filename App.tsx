@@ -17,7 +17,10 @@ const WELCOME_MESSAGE: Message = {
 const App: React.FC = () => {
   const [showApp, setShowApp] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [isLiveMode, setIsLiveMode] = useState(false);
+  
+  // State for toggling between Standard UI, Live Voice, and Live Text
+  const [liveMode, setLiveMode] = useState<'off' | 'voice' | 'chat'>('off');
+  
   const [isTyping, setIsTyping] = useState(false);
   const [cellar, setCellar] = useState<Wine[]>([]);
   const [activeSupermarkets, setActiveSupermarkets] = useState<string[]>([]);
@@ -351,19 +354,15 @@ const App: React.FC = () => {
     if (window.innerWidth < 1024) setIsSidebarOpen(false);
     getAudioContext();
     
-    // Determine quality tier based on price/tags for research signaling
     const isFineWine = wine.price > 15 || wine.tags.toLowerCase().includes('premium') || wine.tags.toLowerCase().includes('prestige');
     const researchTarget = isFineWine ? "specialist fine wine merchants and critics" : "supermarket inventories";
     
-    // Immediate Research Feedback
     setIsTyping(true);
     setStatusMessage(`Vincent is scanning ${researchTarget}...`);
     
     if (cyclerRef.current) clearInterval(cyclerRef.current);
 
-    // Yield main thread to prevent Safari lockup
     setTimeout(() => {
-      // Step A: Stricter Local CSV Scan (Keyword Match in JS)
       const queryKeywords = (wine.tags + " " + wine.type).toLowerCase().split(/[\s,]+/).filter(k => k.length > 3);
       const localMatches = WINE_DATABASE.filter(w => {
         if (w.name === wine.name) return false;
@@ -371,7 +370,6 @@ const App: React.FC = () => {
         return queryKeywords.some(k => wText.includes(k));
       }).slice(0, 5);
 
-      // Step B: Logic Expansion & 'Web-First' Trigger
       let internetFallbackInstruction = "";
       if (localMatches.length < 3) {
         const qualityPrefix = isFineWine ? "Fine wine" : "Everyday";
@@ -446,7 +444,21 @@ const App: React.FC = () => {
       className="w-full overflow-hidden bg-[#F7E1A1] relative"
       style={{ height: `${viewportHeight}px` }}
     >
-      {isLiveMode && <LiveSommelier onClose={() => setIsLiveMode(false)} />}
+      {/* FINAL SYNC: Passing all props to LiveSommelier for Voice/Text parity */}
+      {liveMode !== 'off' && (
+        <LiveSommelier 
+          isChatMode={liveMode === 'chat'} 
+          onClose={() => setLiveMode('off')} 
+          onSwitchMode={() => setLiveMode(prev => prev === 'voice' ? 'chat' : 'voice')}
+          activeSupermarkets={activeSupermarkets}
+          activeWineTypes={activeWineTypes}
+          activePriceTier={activePriceTier}
+          // Bridging to App.tsx memory and logic
+          messages={messages}
+          handleSendMessage={handleSendMessage}
+          isTyping={isTyping}
+        />
+      )}
       
       {!showApp ? (
         <div className="fixed inset-0 bg-[#800020] flex flex-col items-center justify-center p-6 z-[100] overflow-hidden">
@@ -512,7 +524,7 @@ const App: React.FC = () => {
                     <Trash2 size={20} />
                   </button>
                   <button 
-                    onClick={() => setIsLiveMode(true)}
+                    onClick={() => setLiveMode('voice')}
                     className="flex items-center gap-2 bg-[#F7E1A1] text-[#800020] hover:bg-white px-5 py-2 rounded-full transition-all text-sm font-bold shadow-lg"
                   >
                     <Mic size={16} />
