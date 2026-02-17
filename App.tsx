@@ -18,7 +18,8 @@ const App: React.FC = () => {
   const [showApp, setShowApp] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   
-  // State for toggling between Standard UI, Live Voice, and Live Text
+  // --- CHANGE 1: UPDATED STATE FOR LIVE MODES ---
+  // Replaces: const [isLiveMode, setIsLiveMode] = useState(false);
   const [liveMode, setLiveMode] = useState<'off' | 'voice' | 'chat'>('off');
   
   const [isTyping, setIsTyping] = useState(false);
@@ -354,15 +355,19 @@ const App: React.FC = () => {
     if (window.innerWidth < 1024) setIsSidebarOpen(false);
     getAudioContext();
     
+    // Determine quality tier based on price/tags for research signaling
     const isFineWine = wine.price > 15 || wine.tags.toLowerCase().includes('premium') || wine.tags.toLowerCase().includes('prestige');
     const researchTarget = isFineWine ? "specialist fine wine merchants and critics" : "supermarket inventories";
     
+    // Immediate Research Feedback
     setIsTyping(true);
     setStatusMessage(`Vincent is scanning ${researchTarget}...`);
     
     if (cyclerRef.current) clearInterval(cyclerRef.current);
 
+    // Yield main thread to prevent Safari lockup
     setTimeout(() => {
+      // Step A: Stricter Local CSV Scan (Keyword Match in JS)
       const queryKeywords = (wine.tags + " " + wine.type).toLowerCase().split(/[\s,]+/).filter(k => k.length > 3);
       const localMatches = WINE_DATABASE.filter(w => {
         if (w.name === wine.name) return false;
@@ -370,6 +375,7 @@ const App: React.FC = () => {
         return queryKeywords.some(k => wText.includes(k));
       }).slice(0, 5);
 
+      // Step B: Logic Expansion & 'Web-First' Trigger
       let internetFallbackInstruction = "";
       if (localMatches.length < 3) {
         const qualityPrefix = isFineWine ? "Fine wine" : "Everyday";
@@ -444,7 +450,8 @@ const App: React.FC = () => {
       className="w-full overflow-hidden bg-[#F7E1A1] relative"
       style={{ height: `${viewportHeight}px` }}
     >
-      {/* FINAL SYNC: Passing all props to LiveSommelier for Voice/Text parity */}
+      {/* --- CHANGE 2: UPDATED LIVE SOMMELIER CALL --- */}
+      {/* This now connects the "Live Text" box to your chat history */}
       {liveMode !== 'off' && (
         <LiveSommelier 
           isChatMode={liveMode === 'chat'} 
@@ -453,7 +460,6 @@ const App: React.FC = () => {
           activeSupermarkets={activeSupermarkets}
           activeWineTypes={activeWineTypes}
           activePriceTier={activePriceTier}
-          // Bridging to App.tsx memory and logic
           messages={messages}
           handleSendMessage={handleSendMessage}
           isTyping={isTyping}
@@ -523,6 +529,7 @@ const App: React.FC = () => {
                   <button onClick={clearHistory} className="p-2 hover:bg-white/10 rounded-lg text-white/70" title="Clear Chat">
                     <Trash2 size={20} />
                   </button>
+                  {/* --- CHANGE 3: UPDATED HEADER BUTTON TO TRIGGER VOICE --- */}
                   <button 
                     onClick={() => setLiveMode('voice')}
                     className="flex items-center gap-2 bg-[#F7E1A1] text-[#800020] hover:bg-white px-5 py-2 rounded-full transition-all text-sm font-bold shadow-lg"
