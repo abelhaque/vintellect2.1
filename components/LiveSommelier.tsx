@@ -1,18 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { GoogleGenAI, LiveServerMessage, Modality } from '@google/genai';
 import { 
-  X, 
-  Mic, 
-  Volume2, 
-  ShieldCheck, 
-  Loader2, 
-  MessageSquare, 
-  Send, 
-  PlayCircle, 
-  AlertCircle, 
-  Sparkles,
-  Info,
-  ShieldAlert
+  X, Mic, Volume2, ShieldCheck, Loader2, MessageSquare, Send, PlayCircle, AlertCircle, Sparkles, Info, ShieldAlert 
 } from 'lucide-react';
 import { Message } from '../types';
 
@@ -29,7 +18,7 @@ interface LiveSommelierProps {
   isTyping: boolean;
 }
 
-const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
+export const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
   const [connectionState, setConnectionState] = useState<'idle' | 'connecting' | 'listening' | 'speaking' | 'error'>('idle');
   const [errorMsg, setErrorMsg] = useState('');
   const [textInput, setTextInput] = useState('');
@@ -42,10 +31,6 @@ const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
   const animationFrameRef = useRef<number | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
 
-  /**
-   * PCM DECODER
-   * Normalizes Gemini 3's neural audio stream
-   */
   const decodeAudioData = async (data: Uint8Array, ctx: AudioContext, sampleRate: number): Promise<AudioBuffer> => {
     const dataInt16 = new Int16Array(data.buffer);
     const buffer = ctx.createBuffer(1, dataInt16.length, sampleRate);
@@ -64,26 +49,21 @@ const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
       const stream = props.preAuthorizedStream;
       if (!stream) throw new Error("Hardware link missing. Please re-enter cellar.");
 
-      // Gemini 3 Audio Standards
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       const inputCtx = new AudioCtx({ sampleRate: 16000 });
       const outputCtx = new AudioCtx({ sampleRate: 24000 });
       audioContextRef.current = outputCtx;
-      
       if (outputCtx.state === 'suspended') await outputCtx.resume();
 
-      // Real-time Waveform Analyser
       const analyser = inputCtx.createAnalyser();
       analyser.fftSize = 256;
       analyserRef.current = analyser;
       const sourceNode = inputCtx.createMediaStreamSource(stream);
       sourceNode.connect(analyser);
 
-      const bufferLength = analyser.frequencyBinCount;
-      const dataArray = new Uint8Array(bufferLength);
-      
       const updateWaveform = () => {
         if (!analyserRef.current) return;
+        const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
         analyserRef.current.getByteFrequencyData(dataArray);
         let sum = 0;
         for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
@@ -92,12 +72,12 @@ const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
       };
       updateWaveform();
 
-      // SECURE WEBSOCKET: GEMINI 3 FLASH
       const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
       const ai = new GoogleGenAI({ apiKey });
       
       const sessionPromise = ai.live.connect({
-        model: 'gemini-3-flash', 
+        // PAID TIER REQUIREMENT: Use the full models/ path
+        model: 'models/gemini-3-flash', 
         callbacks: {
           onopen: () => {
             console.log("Gemini 3 Neural Link: ESTABLISHED");
@@ -110,17 +90,14 @@ const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
               const bin = atob(base64Audio);
               const bytes = new Uint8Array(bin.length);
               for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-              
               const audioBuffer = await decodeAudioData(bytes, outputCtx, 24000);
               const source = outputCtx.createBufferSource();
               source.buffer = audioBuffer;
               source.connect(outputCtx.destination);
-              
               const now = outputCtx.currentTime;
               if (nextStartTimeRef.current < now) nextStartTimeRef.current = now + 0.05;
               source.start(nextStartTimeRef.current);
               nextStartTimeRef.current += audioBuffer.duration;
-              
               sourcesRef.current.add(source);
               source.onended = () => {
                 sourcesRef.current.delete(source);
@@ -136,7 +113,7 @@ const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
             if (event.code !== 1000) {
                 setConnectionState('error');
                 if (event.code === 1008) {
-                    setErrorMsg("Policy Rejection (1008): Gemini 3 requires Billing-Enabled API Keys.");
+                    setErrorMsg("Policy Rejection (1008): Verify API key is set to 'Pay-as-you-go' in AI Studio.");
                 } else {
                     setErrorMsg(`Neural Link Dropped: ${event.code}`);
                 }
@@ -148,14 +125,12 @@ const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Fenrir' } } },
-          systemInstruction: `You are Vintellect 3.0. UK Sommelier. 
-            Retailers: ${props.activeSupermarkets.join(', ') || 'All'}. 
-            Budget: ${props.activePriceTier || 'Flexible'}.
-            Your persona is elite, British, and authoritative.`
+          systemInstruction: `You are Vintellect 3.0. Elite UK Sommelier. 
+            Retailers: ${props.activeSupermarkets.join(', ') || 'Waitrose, M&S, Tesco, Sainsbury\'s'}. 
+            Budget: ${props.activePriceTier || 'Flexible'}.`
         }
       });
       sessionRef.current = await sessionPromise;
-
     } catch (err: any) {
       setConnectionState('error');
       setErrorMsg(err.message || "Gemini 3 Neural Failure.");
@@ -181,7 +156,7 @@ const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
       <div className="absolute top-8 right-8 flex gap-4">
         <button onClick={props.onSwitchMode} className="flex items-center gap-2 px-5 py-2 bg-white/10 hover:bg-white/20 rounded-full text-xs font-bold uppercase tracking-widest transition-all shadow-lg">
           {props.isChatMode ? <Mic size={16} /> : <MessageSquare size={16} />}
-          {props.isChatMode ? "Voice Mode" : "View History"}
+          {props.isChatMode ? "Voice Mode" : "Neural History"}
         </button>
         <button onClick={props.onClose} className="p-3 hover:bg-white/10 rounded-full transition-colors"><X size={24} /></button>
       </div>
@@ -196,7 +171,6 @@ const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
                    <PlayCircle size={100} className="text-[#F7E1A1]" />
                 </div>
                 <h2 className="text-3xl font-serif font-bold italic tracking-tight">Sync Gemini 3</h2>
-                <p className="text-[10px] uppercase tracking-[0.4em] opacity-40 font-bold">Authorized Neural Core</p>
               </button>
             ) : (
               <>
@@ -237,32 +211,8 @@ const LiveSommelier: React.FC<LiveSommelierProps> = (props) => {
                       </div>
                   ))}
               </div>
-              <div className="p-6 bg-[#800020]/50 border-t border-white/5 flex gap-3">
-                  <input 
-                    value={textInput} 
-                    onChange={(e) => setTextInput(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleSendText()}
-                    className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-sm outline-none placeholder:text-white/20 focus:border-[#F7E1A1]/50 transition-all" 
-                    placeholder="Message the Sommelier..." 
-                  />
-                  <button onClick={handleSendText} className="p-4 bg-[#F7E1A1] text-[#800020] rounded-xl hover:bg-white transition-all active:scale-90">
-                    <Send size={20}/>
-                  </button>
-              </div>
           </div>
         )}
-        
-        <div className="mt-8 flex items-center gap-6 opacity-40">
-           <div className="flex flex-col items-center gap-2">
-              <ShieldCheck size={24} />
-              <span className="text-[7px] uppercase font-bold tracking-[0.3em]">Neural Encryption</span>
-           </div>
-           <div className="w-px h-10 bg-[#F7E1A1]/20" />
-           <div className="flex flex-col items-center gap-2">
-              <Info size={24} />
-              <span className="text-[7px] uppercase font-bold tracking-[0.3em]">Gemini 3.0</span>
-           </div>
-        </div>
       </div>
     </div>
   );
