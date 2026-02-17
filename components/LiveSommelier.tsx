@@ -87,7 +87,7 @@ const LiveSommelier: React.FC<LiveSommelierProps> = ({
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         
         const sessionPromise = ai.live.connect({
-          model: 'gemini-2.0-flash-exp',
+          model: 'gemini-3-flash-preview',
           callbacks: {
             onopen: () => {
               setConnectionState('listening');

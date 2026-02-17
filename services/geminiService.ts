@@ -5,6 +5,9 @@ import { WINE_DATABASE } from "../constants";
 // 1. SAFELY GET KEY
 const API_KEY = import.meta.env.VITE_GEMINI_API_KEY || "";
 
+// THE 2026 UNIFIED MODEL
+const MAIN_MODEL = "gemini-3-flash-preview"; 
+
 const getAI = () => {
   if (!API_KEY) {
     console.error("CRITICAL: VITE_GEMINI_API_KEY is missing!");
@@ -13,7 +16,8 @@ const getAI = () => {
   return new GoogleGenerativeAI(API_KEY);
 };
 
-// Robust CSV Line Splitter
+// --- RESTORED: YOUR ORIGINAL CSV LOGIC ---
+
 const splitCSV = (text: string) => {
   const result = [];
   let current = '';
@@ -30,7 +34,6 @@ const splitCSV = (text: string) => {
   return result;
 };
 
-// Optimized Local Lookup
 const getContextualWineData = (
   customKb: string | null, 
   activeRetailers: string[], 
@@ -109,6 +112,8 @@ CONSTRAINT: ${retailerConstraint}
 `;
 };
 
+// --- END RESTORED LOGIC ---
+
 export const generateWineResponseStream = async (
   history: Message[], 
   activeSupermarkets: string[],
@@ -118,21 +123,16 @@ export const generateWineResponseStream = async (
 ): Promise<{ sources: Source[] }> => {
   const genAI = getAI();
   
-  // VERIFIED WORKING MODEL: Gemini 2.0 Flash
-  // This model definitely exists (API verified) and is paid-tier enabled.
+  // UPGRADED TO GEMINI 3 FLASH PREVIEW
   const model = genAI.getGenerativeModel({ 
-    model: "gemini-2.0-flash", 
+    model: MAIN_MODEL, 
     systemInstruction: getSystemInstruction(activeSupermarkets, activeWineTypes, activePriceTier, ""),
   });
 
   const lastUserMessage = [...history].reverse().find(m => m.role === 'user')?.content || "Hello";
 
-  // FILTER: Keep the chat clean
   const validHistory = history.slice(0, -1)
-    .filter((msg, index) => {
-      if (index === 0 && msg.role === 'assistant') return false;
-      return true;
-    })
+    .filter((msg, index) => !(index === 0 && msg.role === 'assistant'))
     .map(msg => ({
       role: msg.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: msg.content || "" }]
@@ -147,7 +147,6 @@ export const generateWineResponseStream = async (
 
   try {
     const result = await chat.sendMessageStream(lastUserMessage);
-
     let fullText = "";
     for await (const chunk of result.stream) {
       const chunkText = chunk.text();
@@ -156,15 +155,14 @@ export const generateWineResponseStream = async (
     }
     return { sources: [] };
   } catch (error) {
-    console.error("Gemini Stream Error:", error);
+    console.error("Gemini 3 Stream Error:", error);
     throw error;
   }
 };
 
 export const analyzeImage = async (prompt: string, base64Data: string, mimeType: string): Promise<string> => {
   const genAI = getAI();
-  // Using 2.0 Flash for Vision as well
-  const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+  const model = genAI.getGenerativeModel({ model: MAIN_MODEL });
   const result = await model.generateContent([
     prompt,
     { inlineData: { data: base64Data, mimeType } }
